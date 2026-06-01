@@ -223,27 +223,14 @@ class RuntimeManager: ObservableObject {
             "-codex-backend", config.codexBackend,
             "-management-host", "127.0.0.1",
             "-management-port", "0",
-            "-management-token", token,
             "-data-dir", config.dataDir,
             "-log-dir", config.logDir,
         ]
         if !config.codexAppServerURL.isEmpty {
             arguments += ["-codex-app-server-url", config.codexAppServerURL]
         }
-        if !config.opencodeUser.isEmpty {
-            arguments += ["-opencode-user", config.opencodeUser]
-        }
-        if !config.opencodePass.isEmpty {
-            arguments += ["-opencode-pass", config.opencodePass]
-        }
         if !config.remoteURL.isEmpty {
             arguments += ["-remote-url", config.remoteURL]
-        }
-        if !config.relayEndpoint.isEmpty {
-            arguments += ["-relay-endpoint", config.relayEndpoint]
-        }
-        if !config.relayRouteID.isEmpty {
-            arguments += ["-relay-route-id", config.relayRouteID]
         }
         if !config.relayServiceAddress.isEmpty {
             arguments += ["-relay-service-addr", config.relayServiceAddress]
@@ -255,11 +242,26 @@ class RuntimeManager: ObservableObject {
         // 环境变量：OpenCode 凭据
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = mergedCLIPath(existingPath: environment["PATH"])
+        environment["CCCODE_MANAGEMENT_TOKEN"] = token
         if !config.opencodeUser.isEmpty {
             environment["OPENCODE_SERVER_USERNAME"] = config.opencodeUser
+        } else {
+            environment.removeValue(forKey: "OPENCODE_SERVER_USERNAME")
         }
         if !config.opencodePass.isEmpty {
             environment["OPENCODE_SERVER_PASSWORD"] = config.opencodePass
+        } else {
+            environment.removeValue(forKey: "OPENCODE_SERVER_PASSWORD")
+        }
+        if !config.relayEndpoint.isEmpty {
+            environment["CCCODE_RELAY_ENDPOINT"] = config.relayEndpoint
+        } else {
+            environment.removeValue(forKey: "CCCODE_RELAY_ENDPOINT")
+        }
+        if !config.relayRouteID.isEmpty {
+            environment["CCCODE_RELAY_ROUTE_ID"] = config.relayRouteID
+        } else {
+            environment.removeValue(forKey: "CCCODE_RELAY_ROUTE_ID")
         }
         if !config.relayCredential.isEmpty {
             environment["CCCODE_RELAY_CREDENTIAL"] = config.relayCredential

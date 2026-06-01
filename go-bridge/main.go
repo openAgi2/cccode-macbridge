@@ -39,7 +39,7 @@ func Main() {
 	// 管理 API（Mac App product 模式使用，开发模式不启用）
 	managementHost := flag.String("management-host", "", "Management API host (product mode: 127.0.0.1)")
 	managementPort := flag.Int("management-port", 0, "Management API port (0 = disabled)")
-	managementToken := flag.String("management-token", "", "Management API auth token")
+	managementToken := flag.String("management-token", envOr("CCCODE_MANAGEMENT_TOKEN", ""), "Management API auth token")
 	dataDirPath := flag.String("data-dir", "", "Data directory for runtime state")
 	logDirPath := flag.String("log-dir", "", "Log directory")
 	remoteURL := flag.String("remote-url", "", "外部可达的 Bridge WebSocket URL（如 wss://my-tailscale:8777/bridge）")

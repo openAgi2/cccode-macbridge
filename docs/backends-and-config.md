@@ -18,13 +18,16 @@ configured by the user or release owner outside Git.
 Supported configuration surfaces:
 
 - MacBridge app settings.
-- Runtime CLI flags such as `-opencode-url`, `-opencode-user`,
-  `-opencode-pass`, `-codex-app-server-url`, and relay flags.
-- Private environment variables for local development.
+- Runtime CLI flags for non-sensitive local settings such as port, backend
+  mode, and local service URLs.
+- Private environment variables for credentials, route identifiers, and
+  management tokens.
 - Private config files that are never committed.
 
 Use `config.example.env` as a placeholder reference. It intentionally contains
 no production relay endpoint, token, route ID, password, or signing identity.
+MacBridge passes sensitive runtime values through the child process environment
+instead of argv so they do not appear in ordinary process listings.
 
 ## Relay
 
