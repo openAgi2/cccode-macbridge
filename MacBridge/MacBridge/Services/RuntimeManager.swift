@@ -845,7 +845,14 @@ enum RelayRouteCredentialStore {
 }
 
 struct OfficialRelayConfiguration {
-    static let endpoint = ""
+    static var endpoint: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CCCODEOfficialRelayEndpoint") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static var isAvailable: Bool {
+        !endpoint.isEmpty
+    }
 
     let routeID: String
     let credential: String
@@ -853,12 +860,15 @@ struct OfficialRelayConfiguration {
 
 enum OfficialRelayProvisioningError: LocalizedError {
     case invalidEndpoint
+    case unavailable
     case registrationFailed
 
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
             return "官方 Relay 地址无效。"
+        case .unavailable:
+            return "此构建未配置官方 Relay。"
         case .registrationFailed:
             return "官方 Relay 暂时无法启用。"
         }
@@ -869,6 +879,9 @@ actor OfficialRelayProvisioner {
     static let shared = OfficialRelayProvisioner()
 
     func ensureRoute() async throws -> OfficialRelayConfiguration {
+        guard OfficialRelayConfiguration.isAvailable else {
+            throw OfficialRelayProvisioningError.unavailable
+        }
         let defaults = UserDefaults.standard
         let savedEndpoint = defaults.string(forKey: "relayEndpoint") ?? ""
         let savedRouteID = defaults.string(forKey: "relayRouteID") ?? ""

@@ -47,6 +47,16 @@ class AppDependencies: ObservableObject {
             NSLog("[AppDependencies] Automatically generated OpenCode credentials for first-time launch.")
         }
 
+        let relayEndpoint = OfficialRelayConfiguration.isAvailable
+            ? UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
+            : ""
+        let relayRouteID = OfficialRelayConfiguration.isAvailable
+            ? UserDefaults.standard.string(forKey: "relayRouteID") ?? ""
+            : ""
+        let relayCredential = OfficialRelayConfiguration.isAvailable
+            ? RelayRouteCredentialStore.load()
+            : ""
+
         let config = RuntimeConfig(
             executablePath: executablePath,
             dataDir: dir,
@@ -59,9 +69,9 @@ class AppDependencies: ObservableObject {
             remoteURL: UserDefaults.standard.string(forKey: "remoteBridgeURL") ?? "",
             includeTailscaleInPairing: UserDefaults.standard.object(forKey: "pairingIncludeTailscale") as? Bool ?? true,
             includeRemoteInPairing: UserDefaults.standard.object(forKey: "pairingIncludeRemote") as? Bool ?? true,
-            relayEndpoint: UserDefaults.standard.string(forKey: "relayEndpoint") ?? "",
-            relayRouteID: UserDefaults.standard.string(forKey: "relayRouteID") ?? "",
-            relayCredential: RelayRouteCredentialStore.load(),
+            relayEndpoint: relayEndpoint,
+            relayRouteID: relayRouteID,
+            relayCredential: relayCredential,
             relayServiceAddress: UserDefaults.standard.string(forKey: "relayServiceAddress") ?? ""
         )
 
@@ -103,21 +113,23 @@ class AppDependencies: ObservableObject {
             .store(in: &cancellables)
 
         runtimeManager.start()
-        Task { [weak self] in
-            do {
-                let relay = try await OfficialRelayProvisioner.shared.ensureRoute()
-                guard let self else { return }
-                guard self.runtimeManager.config.relayEndpoint != OfficialRelayConfiguration.endpoint ||
-                        self.runtimeManager.config.relayRouteID != relay.routeID ||
-                        self.runtimeManager.config.relayCredential != relay.credential else {
-                    return
+        if OfficialRelayConfiguration.isAvailable {
+            Task { [weak self] in
+                do {
+                    let relay = try await OfficialRelayProvisioner.shared.ensureRoute()
+                    guard let self else { return }
+                    guard self.runtimeManager.config.relayEndpoint != OfficialRelayConfiguration.endpoint ||
+                            self.runtimeManager.config.relayRouteID != relay.routeID ||
+                            self.runtimeManager.config.relayCredential != relay.credential else {
+                        return
+                    }
+                    self.runtimeManager.config.relayEndpoint = OfficialRelayConfiguration.endpoint
+                    self.runtimeManager.config.relayRouteID = relay.routeID
+                    self.runtimeManager.config.relayCredential = relay.credential
+                    self.runtimeManager.restart()
+                } catch {
+                    NSLog("[AppDependencies] 官方 Relay 自动启用失败: \(error.localizedDescription)")
                 }
-                self.runtimeManager.config.relayEndpoint = OfficialRelayConfiguration.endpoint
-                self.runtimeManager.config.relayRouteID = relay.routeID
-                self.runtimeManager.config.relayCredential = relay.credential
-                self.runtimeManager.restart()
-            } catch {
-                NSLog("[AppDependencies] 官方 Relay 自动启用失败: \(error.localizedDescription)")
             }
         }
     }
@@ -128,9 +140,15 @@ class AppDependencies: ObservableObject {
         runtimeManager.config.remoteURL = remoteURL
         runtimeManager.config.includeTailscaleInPairing = UserDefaults.standard.object(forKey: "pairingIncludeTailscale") as? Bool ?? true
         runtimeManager.config.includeRemoteInPairing = UserDefaults.standard.object(forKey: "pairingIncludeRemote") as? Bool ?? true
-        runtimeManager.config.relayEndpoint = UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
-        runtimeManager.config.relayRouteID = UserDefaults.standard.string(forKey: "relayRouteID") ?? ""
-        runtimeManager.config.relayCredential = RelayRouteCredentialStore.load()
+        runtimeManager.config.relayEndpoint = OfficialRelayConfiguration.isAvailable
+            ? UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
+            : ""
+        runtimeManager.config.relayRouteID = OfficialRelayConfiguration.isAvailable
+            ? UserDefaults.standard.string(forKey: "relayRouteID") ?? ""
+            : ""
+        runtimeManager.config.relayCredential = OfficialRelayConfiguration.isAvailable
+            ? RelayRouteCredentialStore.load()
+            : ""
         runtimeManager.config.relayServiceAddress = UserDefaults.standard.string(forKey: "relayServiceAddress") ?? ""
         runtimeManager.restart()
     }

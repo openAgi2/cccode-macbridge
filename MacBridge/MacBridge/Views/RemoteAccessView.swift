@@ -41,8 +41,13 @@ struct RemoteAccessView: View {
         remoteStatus?.relay?.configured == true
     }
 
+    private var isOfficialRelayAvailable: Bool {
+        OfficialRelayConfiguration.isAvailable
+    }
+
     private var relayStatusText: String {
         if isRelayEnabled { return "已启用" }
+        if !isOfficialRelayAvailable { return "未配置" }
         if isProvisioningRelay { return "正在开通" }
         return "未启用"
     }
@@ -124,8 +129,10 @@ struct RemoteAccessView: View {
                 iconColor: .green,
                 title: "官方加密 Relay",
                 status: relayStatusText,
-                detail: isRelayEnabled ? "已准备好外网安全配对与连接" : "开通后无需配置公网服务器地址",
-                hint: "Mac 与 iPhone 只需联网，无需 FRP 或 Tailscale"
+                detail: relayConnectionDetail,
+                hint: isOfficialRelayAvailable
+                    ? "Mac 与 iPhone 只需联网，无需 FRP 或 Tailscale"
+                    : "公开构建不内置官方 Relay endpoint"
             )
 
             DisclosureGroup("高级连接方式（自托管 / 调试）", isExpanded: $showAdvancedConnections) {
@@ -207,9 +214,7 @@ struct RemoteAccessView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            Text(isRelayEnabled
-                ? "已启用端到端加密公网通道，新设备可直接扫描二维码完成安全配对。"
-                : "MacBridge 会自动开通并管理加密公网通道，无需填写服务器地址或密钥。")
+            Text(relayDescriptionText)
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -220,7 +225,7 @@ struct RemoteAccessView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-            } else if !isRelayEnabled {
+            } else if !isRelayEnabled && isOfficialRelayAvailable {
                 Button("重试启用") {
                     Task { await enableOfficialRelay() }
                 }
@@ -234,6 +239,22 @@ struct RemoteAccessView: View {
                     .foregroundColor(.orange)
             }
         }
+    }
+
+    private var relayConnectionDetail: String {
+        if isRelayEnabled { return "已准备好外网安全配对与连接" }
+        if !isOfficialRelayAvailable { return "当前构建未配置官方 Relay endpoint" }
+        return "开通后无需配置公网服务器地址"
+    }
+
+    private var relayDescriptionText: String {
+        if isRelayEnabled {
+            return "已启用端到端加密公网通道，新设备可直接扫描二维码完成安全配对。"
+        }
+        if !isOfficialRelayAvailable {
+            return "公开构建未内置官方 Relay；局域网配对可用，公网 Relay 需由发布方配置 endpoint。"
+        }
+        return "MacBridge 会自动开通并管理加密公网通道，无需填写服务器地址或密钥。"
     }
 
     private func connectionRow(
@@ -299,6 +320,10 @@ struct RemoteAccessView: View {
 
     private func enableOfficialRelay() async {
         guard !isProvisioningRelay, !isRelayEnabled else { return }
+        guard isOfficialRelayAvailable else {
+            relayConfigError = "官方 Relay 启用失败：此构建未配置官方 Relay。"
+            return
+        }
 
         isProvisioningRelay = true
         defer { isProvisioningRelay = false }
