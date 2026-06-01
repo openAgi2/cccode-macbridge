@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"item/reasoning/textDelta","params":{"threadId":"thread_abc123","turnId":"turn_def456","itemId":"item_rsn001","delta":"Let me analyze this...","contentIndex":0}}

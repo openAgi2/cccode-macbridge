@@ -1,0 +1,62 @@
+# Public Readiness Report
+
+Date: 2026-06-01
+
+This repository is a public-candidate MacBridge repository created by clean source import. It is not marked ready to publish until the owner confirms licensing, signing, release, and final manual product validation.
+
+## Scope
+
+Included:
+
+- MacBridge macOS app.
+- `go-bridge` runtime adapter.
+- `relay-server` as an independent Go module.
+- Minimal `core/`, `config/`, and `agent/` code copied from local `cc-connect` for Claude Code, OpenCode, and Codex support.
+- Protocol compatibility docs under `docs/protocol/`.
+
+Excluded:
+
+- iOS app and `message-web`.
+- `core/engine.go`, `core/streaming.go`, and `agent/acp/`.
+- Handoffs, `.exec-plan`, internal completion reports, private deploy artifacts, and real deployment configuration.
+
+## Added Repository Files
+
+- `README.md`
+- `LICENSE`
+- `SECURITY.md`
+- `CONTRIBUTING.md`
+- `.gitignore`
+- `.github/workflows/ci.yml`
+- `docs/protocol/`
+
+## Secret And Private Marker Scan
+
+Command class:
+
+```bash
+rg -n "<known private marker alternation>" . --glob '!.git/**'
+rg -n "(API[_-]?KEY|SECRET|TOKEN|PASSWORD|PRIVATE[_-]?KEY|PROVISION).*[=:][[:space:]]*[A-Za-z0-9_./+=-]{12,}" . --glob '!.git/**'
+```
+
+Result:
+
+- No known real relay endpoint, VPS IP, Apple team ID, private source path, handoff, or exec-plan marker was found.
+- One password-pattern hit remains in `MacBridge/MacBridge/Services/RuntimeManager.swift`; it assigns the user-provided OpenCode password from runtime configuration into the child process environment and is not a hardcoded secret.
+
+## CI
+
+CI is configured for pull requests and pushes to `main`:
+
+- `go build ./go-bridge`
+- `go test ./go-bridge/... -count=1`
+- `(cd relay-server && go test ./... -count=1)`
+- MacBridge Debug macOS `xcodebuild`
+
+## Remaining Owner Decisions Before Public Release
+
+- Replace the placeholder license with the intended public license.
+- Decide final bundle identifier, signing identity, hardened runtime, and notarization flow.
+- Decide whether `relay-server` deployment docs should include a concrete public endpoint or only self-hosting guidance.
+- Run a dedicated secret scanner such as Gitleaks on the final repository before flipping visibility.
+- Complete Task E manual integration validation with real MacBridge and real iOS builds.

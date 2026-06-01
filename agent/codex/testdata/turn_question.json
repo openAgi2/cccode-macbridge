@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"turn/question","params":{"threadId":"thread_abc123","id":"q_001","question":"Which file should I modify?","options":[{"id":"opt_a","label":"main.go","description":"The main entry point"},{"id":"opt_b","label":"handler.go","description":"The request handler"}],"required":true}}

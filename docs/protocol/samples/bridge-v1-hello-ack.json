@@ -1,0 +1,35 @@
+{
+  "type": "hello_ack",
+  "ok": true,
+  "bridge": {
+    "bridgeId": "brg_01HY0000000000000000000000",
+    "displayName": "Jack's MacBook Pro",
+    "runtimeVersion": "0.1.0-dev",
+    "currentURLs": {
+      "local": "ws://192.168.1.25:8777/bridge",
+      "remote": null
+    },
+    "protocol": {
+      "name": "cccode-bridge",
+      "version": 1,
+      "schemaRevision": "2026-05-07"
+    },
+    "security": {
+      "level": "lan",
+      "scheme": "ws",
+      "hostCategory": "private",
+      "isTailscaleCGNAT": false,
+      "isPublicWS": false
+    }
+  },
+  "capabilities": {
+    "remoteAccessConfig": true,
+    "trustedDevices": true,
+    "offlineSnapshots": true,
+    "workspaceList": true,
+    "sessionMutation": true
+  },
+  "backends": [],
+  "bridgeStatus": "ready",
+  "runningSessions": []
+}

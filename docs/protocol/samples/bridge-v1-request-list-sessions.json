@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "requestId": "req-001",
+  "backendId": "claude",
+  "method": "list_sessions",
+  "params": {
+    "directory": "/Users/example/project"
+  }
+}

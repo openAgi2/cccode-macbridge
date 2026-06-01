@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_abc123","turnId":"turn_def456","itemId":"item_msg001","delta":"world!"}}

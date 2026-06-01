@@ -1,0 +1,199 @@
+export type BridgeProtocolName = "cccode-bridge";
+
+export interface BridgeProtocol {
+  name: BridgeProtocolName;
+  version: 1;
+  schemaRevision?: string;
+  supportedSchemaRevisions?: string[];
+}
+
+export interface BridgeWireError {
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+  recoverBy?: string;
+  backendId?: string;
+}
+
+export interface BridgeClientInfo {
+  id?: string;
+  app?: string;
+  name?: string;
+  version: string;
+  deviceId?: string;
+}
+
+export interface BridgeHello {
+  type: "hello";
+  client: {
+    app: string;
+    version: string;
+    deviceId: string;
+  };
+  protocol: BridgeProtocol;
+}
+
+export interface BridgeRegister {
+  type: "register";
+  client: {
+    id: string;
+    name: string;
+    version: string;
+  };
+  protocol: Pick<BridgeProtocol, "name" | "version">;
+  lastBridgeEpoch?: string;
+  lastEventId?: string;
+  lastSeenBySession?: Record<string, { eventId: string; seq: number }>;
+}
+
+export interface BridgeSecurityProfile {
+  level: string;
+  scheme?: string;
+  hostCategory?: string;
+  isTailscaleCGNAT?: boolean;
+  isPublicWS?: boolean;
+}
+
+export interface BridgeBackendInfo {
+  id: string;
+  kind: "claude_code" | "opencode" | "codex" | string;
+  displayName?: string;
+  capabilities?: string[];
+  descriptor?: Record<string, string>;
+  permissionMode?: { mode?: string };
+}
+
+export interface BridgeHelloAck {
+  type: "hello_ack";
+  ok: boolean;
+  bridge?: {
+    bridgeId: string;
+    displayName: string;
+    runtimeVersion: string;
+    currentURLs: {
+      local: string;
+      remote?: string | null;
+      remotes?: string[];
+    };
+    protocol: BridgeProtocol;
+    security?: BridgeSecurityProfile;
+  };
+  capabilities?: Record<string, boolean>;
+  backends?: BridgeBackendInfo[];
+  bridgeStatus?: string;
+  runningSessions?: Array<{
+    backendId: string;
+    workspaceId?: string;
+    sessionId: string;
+    status: "running" | string;
+  }>;
+  error?: BridgeWireError;
+}
+
+export interface BridgeRegisterAck {
+  type: "register_ack";
+  ok: boolean;
+  protocol?: BridgeProtocol;
+  serverCapabilities?: string[];
+  bridgeEpoch?: string;
+  backends?: BridgeBackendInfo[];
+  recovery?: {
+    type?: string;
+    affectedSessions?: Array<{ backendId?: string; sessionId?: string }>;
+  };
+  error?: BridgeWireError;
+}
+
+export type BridgeRPCMethod =
+  | "hello"
+  | "list_providers"
+  | "set_provider"
+  | "list_models"
+  | "list_agents"
+  | "list_permission_modes"
+  | "set_permission_mode"
+  | "create_session"
+  | "send_message"
+  | "abort_generation"
+  | "get_session"
+  | "get_session_messages"
+  | "delete_session"
+  | "resume_session"
+  | "switch_model"
+  | "resolve_permission"
+  | "list_sessions"
+  | "list_projects"
+  | "fetch_todos"
+  | "get_usage"
+  | "run_diagnostics"
+  | "list_memory_files"
+  | "read_memory_file"
+  | "fetch_content_chunk"
+  | "read_file"
+  | "rename_session"
+  | "share_session"
+  | "archive_session"
+  | "compress_context"
+  | "check_pending_notifications"
+  | "question_reply"
+  | "question_reject"
+  | "get_delivery_prekey_status"
+  | "upload_delivery_prekeys"
+  | "get_delivery_chain_head";
+
+export interface BridgeRequest<TParams = Record<string, unknown>> {
+  type: "request";
+  requestId: string;
+  backendId: string;
+  method: BridgeRPCMethod;
+  params?: TParams;
+}
+
+export interface BridgeResult<TData = unknown> {
+  type?: "result";
+  requestId?: string;
+  backendId?: string;
+  ok?: boolean;
+  data?: TData;
+  error?: BridgeWireError;
+}
+
+export type BridgeEventName =
+  | "text_delta"
+  | "message_updated"
+  | "reasoning_delta"
+  | "tool_started"
+  | "tool_finished"
+  | "todos_updated"
+  | "turn_started"
+  | "turn_completed"
+  | "error"
+  | "permission_request"
+  | "context_compressing"
+  | "context_compressed"
+  | "context_usage_updated"
+  | "question_asked"
+  | "question_resolved";
+
+export interface BridgeEvent<TData = unknown> {
+  type: "event";
+  eventId?: string;
+  seq?: number;
+  bridgeEpoch?: string;
+  backendId?: string;
+  sessionId?: string;
+  event?: BridgeEventName;
+  data?: TData;
+  replayable?: boolean;
+  timestamp?: number;
+}
+
+export interface BridgePing {
+  type: "ping";
+  ts: number;
+}
+
+export interface BridgePong {
+  type?: "pong";
+  ts?: number;
+}

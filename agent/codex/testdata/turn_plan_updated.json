@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"turn/plan/updated","params":{"threadId":"thread_abc123","turnId":"turn_def456","explanation":"I'll read the file first, then make the change.","plan":[{"step":"Read main.go","status":"completed"},{"step":"Fix the bug","status":"in_progress"},{"step":"Run tests","status":"pending"}]}}

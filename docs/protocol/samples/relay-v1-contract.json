@@ -1,0 +1,100 @@
+{
+  "schemaRevision": "2026-05-24-r1",
+  "protocol": {
+    "name": "cccode-relay",
+    "version": 1
+  },
+  "innerProtocol": {
+    "name": "cccode-bridge",
+    "version": 1
+  },
+  "crypto": {
+    "keyAgreement": "X25519",
+    "kdf": "HKDF-SHA256",
+    "aead": "ChaCha20-Poly1305",
+    "hpkeMode": "RFC9180-Base-X25519-HKDF-SHA256-ChaCha20Poly1305",
+    "noncePrefixHex": "00000000",
+    "counterBytes": 8,
+    "counterByteOrder": "big-endian",
+    "paddingBucketBytes": 256
+  },
+  "envelopeFields": [
+    "version",
+    "routeId",
+    "senderId",
+    "destinationId",
+    "channelGeneration",
+    "keyEpochId",
+    "prekeyId",
+    "epochIndex",
+    "epochEphemeralPublicKey",
+    "previousEpochDigest",
+    "epochAuthTag",
+    "messageId",
+    "counter",
+    "ciphertext",
+    "createdAt",
+    "expiresAt"
+  ],
+  "aadFields": [
+    "version",
+    "routeId",
+    "senderId",
+    "destinationId",
+    "channelGeneration",
+    "keyEpochId",
+    "prekeyId",
+    "epochIndex",
+    "epochEphemeralPublicKey",
+    "previousEpochDigest",
+    "epochAuthTag",
+    "messageId",
+    "counter",
+    "createdAt",
+    "expiresAt"
+  ],
+  "mailboxOnlyEnvelopeFields": [
+    "prekeyId",
+    "epochIndex",
+    "epochEphemeralPublicKey",
+    "previousEpochDigest",
+    "epochAuthTag"
+  ],
+  "mailbox": {
+    "direction": "mac_to_ios_only",
+    "lowWatermark": 10,
+    "targetCount": 32,
+    "maxCount": 64,
+    "durableEvents": [
+      "turn_completed",
+      "turn_error",
+      "todos_updated",
+      "session_running_signal",
+      "delivery_reconcile_required"
+    ],
+    "excludedEventClasses": [
+      "text_delta",
+      "thinking_delta",
+      "tool_content",
+      "message_content",
+      "file_content",
+      "session_history"
+    ]
+  },
+  "observation": {
+    "modes": ["full_stream", "milestones_only"],
+    "foregroundLeaseSeconds": 45
+  },
+  "errors": [
+    "relay.bridge_offline",
+    "relay.not_enabled",
+    "relay.device_revoked",
+    "relay.handshake_auth_failed",
+    "relay.counter_invalid",
+    "relay.decrypt_failed",
+    "relay.chain_mismatch",
+    "prekey_limit_exceeded",
+    "relay.prekey_exhausted",
+    "relay.mailbox_expired"
+  ]
+}

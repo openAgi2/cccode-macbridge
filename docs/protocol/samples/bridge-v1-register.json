@@ -1,0 +1,18 @@
+{
+  "type": "register",
+  "client": {
+    "id": "ios-dev-01",
+    "name": "CCCode iOS",
+    "version": "1.0.0"
+  },
+  "protocol": {
+    "name": "cccode-bridge",
+    "version": 1
+  },
+  "lastSeenBySession": {
+    "session-1": {
+      "eventId": "evt-123",
+      "seq": 42
+    }
+  }
+}

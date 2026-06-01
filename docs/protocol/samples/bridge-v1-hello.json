@@ -1,0 +1,13 @@
+{
+  "type": "hello",
+  "client": {
+    "app": "CCCode iOS",
+    "version": "1.0.0",
+    "deviceId": "dev_01HY0000000000000000000000"
+  },
+  "protocol": {
+    "name": "cccode-bridge",
+    "version": 1,
+    "supportedSchemaRevisions": ["2026-05-07"]
+  }
+}

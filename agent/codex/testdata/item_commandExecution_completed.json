@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread_abc123","turnId":"turn_def456","item":{"id":"item_cmd001","type":"commandExecution","command":"ls -la /tmp","status":"completed","exitCode":0,"aggregatedOutput":"total 0\ndrwxr-xr-x  2 root root 40 Jan  1 00:00 test"}}}

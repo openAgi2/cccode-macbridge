@@ -1,0 +1,18 @@
+.DS_Store
+
+# Go build outputs
+/cccode-bridge-runtime
+/go-bridge/go-bridge
+/go-bridge/cccode-bridge-runtime
+/relay-server/relay-server
+/relay-server/cmd/relay-server/relay-server
+
+# Xcode and local build products
+/MacBridge/build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Local runtime state
+*.log
+*.tmp

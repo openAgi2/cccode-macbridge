@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread_abc123","turnId":"turn_def456","item":{"id":"item_fch001","type":"fileChange","changes":[{"path":"main.go","diff":"@@ -1,5 +1,6 @@\n package main\n \n+import \"fmt\"\n func main() {\n-    println(\"hello\")\n+    fmt.Println(\"hello\")\n }"}]}}}

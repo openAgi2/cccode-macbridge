@@ -1,0 +1,434 @@
+package codex
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/openAgi2/cccode-macbridge/core"
+)
+
+// GetRichSessionHistory returns structured history with parts, steps, and
+// thinking blocks parsed from the Codex session JSONL transcript.
+func (a *Agent) GetRichSessionHistory(_ context.Context, sessionID string, limit int) ([]core.RichHistoryEntry, error) {
+	a.mu.RLock()
+	codexHome := a.codexHome
+	a.mu.RUnlock()
+	return getRichSessionHistory(sessionID, codexHome, limit)
+}
+
+func getRichSessionHistory(sessionID, codexHome string, limit int) ([]core.RichHistoryEntry, error) {
+	path := findSessionFile(sessionID, codexHome)
+	if path == "" {
+		return nil, fmt.Errorf("session file not found for %s", sessionID)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	return parseRichHistoryFromJSONL(f, limit)
+}
+
+func parseRichHistoryFromJSONL(f *os.File, limit int) ([]core.RichHistoryEntry, error) {
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 256*1024), codexSessionScannerMaxTokenSize)
+
+	builder := &richHistoryBuilder{}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		var raw struct {
+			Timestamp string          `json:"timestamp"`
+			Type      string          `json:"type"`
+			Payload   json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &raw) != nil {
+			continue
+		}
+		ts, _ := time.Parse(time.RFC3339Nano, raw.Timestamp)
+
+		if raw.Type == "event_msg" {
+			var envelope map[string]any
+			if json.Unmarshal(raw.Payload, &envelope) != nil {
+				continue
+			}
+			payload := envelope
+			if nested, ok := envelope["payload"].(map[string]any); ok {
+				payload = nested
+			}
+			if strings.TrimSpace(appServerStringValue(payload["type"])) == "patch_apply_end" {
+				builder.addPatchResultByCallID(
+					strings.TrimSpace(appServerStringValue(payload["call_id"])),
+					appServerPatchChanges(payload["changes"]),
+					appServerStringValue(payload["status"]),
+				)
+			}
+			continue
+		}
+
+		if raw.Type != "response_item" {
+			continue
+		}
+
+		var item struct {
+			Role      string          `json:"role"`
+			Type      string          `json:"type"`
+			Name      string          `json:"name"`
+			Input     string          `json:"input"`
+			Text      string          `json:"text"`
+			Output    string          `json:"output"`
+			Status    string          `json:"status"`
+			Command   string          `json:"command"`
+			CallID    string          `json:"call_id"`
+			Arguments json.RawMessage `json:"arguments"`
+			Summary   []string        `json:"summary"`
+			Content   []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(raw.Payload, &item) != nil {
+			continue
+		}
+
+		switch {
+		case item.Role == "user" && len(item.Content) > 0:
+			builder.flush()
+			for _, c := range item.Content {
+				if c.Type == "input_text" && c.Text != "" && isUserPrompt(c.Text) {
+					builder.addEntry(core.RichHistoryEntry{
+						Role:      "user",
+						Content:   c.Text,
+						Parts:     []map[string]any{{"type": "text", "content": c.Text}},
+						Timestamp: ts,
+					})
+				}
+			}
+
+		case item.Role == "assistant" && len(item.Content) > 0 && (item.Type == "" || item.Type == "message"):
+			var textParts []string
+			var parts []map[string]any
+			for _, c := range item.Content {
+				if c.Type == "output_text" && c.Text != "" {
+					textParts = append(textParts, c.Text)
+					parts = append(parts, map[string]any{"type": "text", "content": c.Text})
+				}
+			}
+			if len(textParts) > 0 {
+				builder.addText(ts, textParts, parts)
+			}
+
+		case item.Type == "reasoning":
+			text := item.Text
+			if text == "" && len(item.Summary) > 0 {
+				for _, s := range item.Summary {
+					if text != "" {
+						text += "\n"
+					}
+					text += s
+				}
+			}
+			if text != "" {
+				builder.addReasoning(ts, text)
+			}
+
+		case item.Type == "function_call" && item.Name == "update_plan":
+
+		case item.Type == "function_call":
+			toolName := item.Name
+			if mapped, ok := codexToolNames[toolName]; ok {
+				toolName = mapped
+			}
+			if toolName == "" {
+				toolName = "Unknown"
+			}
+			toolInput := extractToolInput(item.Name, item.Arguments)
+			builder.addToolUse(ts, toolName, toolInput, item.CallID)
+
+		case item.Type == "command_execution":
+			builder.addToolUse(ts, "Bash", item.Command, "")
+
+		case item.Type == "function_call_output":
+			builder.addToolResultByCallID(item.CallID, item.Output, item.Status)
+
+		case item.Type == "custom_tool_call" && item.Name == "apply_patch":
+			builder.addToolUse(ts, "Patch", item.Input, item.CallID)
+
+		case item.Type == "custom_tool_call_output":
+			builder.addToolResultByCallID(item.CallID, item.Output, item.Status)
+
+		default:
+			slog.Debug("codex rich history: unhandled response_item",
+				"role", item.Role, "type", item.Type, "name", item.Name)
+		}
+	}
+	builder.flush()
+
+	entries := builder.entries
+	if limit > 0 && len(entries) > limit {
+		entries = entries[len(entries)-limit:]
+	}
+	return entries, nil
+}
+
+func decodeCodexFunctionCallArgumentsRaw(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, nil
+	}
+	return string(raw), nil
+}
+
+func extractToolInput(toolName string, raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if toolName == "exec_command" {
+			var obj struct {
+				Cmd string `json:"cmd"`
+			}
+			if json.Unmarshal([]byte(s), &obj) == nil && obj.Cmd != "" {
+				return obj.Cmd
+			}
+		}
+		return s
+	}
+	return string(raw)
+}
+
+type richHistoryBuilder struct {
+	entries   []core.RichHistoryEntry
+	current   *core.RichHistoryEntry
+	callIDMap map[string]int
+}
+
+func (b *richHistoryBuilder) addEntry(entry core.RichHistoryEntry) {
+	b.flush()
+	b.entries = append(b.entries, entry)
+}
+
+func (b *richHistoryBuilder) addText(ts time.Time, texts []string, parts []map[string]any) {
+	if b.current != nil && b.current.Role == "assistant" {
+		fullContent := ""
+		for _, t := range texts {
+			if fullContent != "" {
+				fullContent += "\n"
+			}
+			fullContent += t
+		}
+		b.current.Content += fullContent
+		b.current.Parts = append(b.current.Parts, parts...)
+		return
+	}
+	b.flush()
+	content := ""
+	for _, t := range texts {
+		if content != "" {
+			content += "\n"
+		}
+		content += t
+	}
+	b.current = &core.RichHistoryEntry{
+		Role:      "assistant",
+		Content:   content,
+		Parts:     parts,
+		Steps:     []map[string]any{},
+		Files:     []map[string]any{},
+		Timestamp: ts,
+	}
+}
+
+func (b *richHistoryBuilder) addReasoning(ts time.Time, text string) {
+	if b.current != nil && b.current.Role == "assistant" {
+		if b.current.Thinking != "" {
+			b.current.Thinking += "\n"
+		}
+		b.current.Thinking += text
+		b.current.Parts = append(b.current.Parts, map[string]any{"type": "reasoning", "content": text})
+		return
+	}
+	b.flush()
+	b.current = &core.RichHistoryEntry{
+		Role:      "assistant",
+		Thinking:  text,
+		Parts:     []map[string]any{{"type": "reasoning", "content": text}},
+		Steps:     []map[string]any{},
+		Files:     []map[string]any{},
+		Timestamp: ts,
+	}
+}
+
+func (b *richHistoryBuilder) addToolUse(ts time.Time, toolName, toolInput, callID string) {
+	if b.current != nil && b.current.Role == "assistant" {
+		stepID := fmt.Sprintf("tool-%d", len(b.current.Steps)+1)
+		step := map[string]any{
+			"id":                             stepID,
+			"toolName":                       toolName,
+			"status":                         "running",
+			"output":                         map[string]any{"kind": "inline", "text": ""},
+			"duration":                       nil,
+			"requiresPermissionConfirmation": false,
+			"availablePermissionOptions":     []any{},
+		}
+		if toolInput != "" {
+			step["title"] = toolInput
+		}
+		b.current.Parts = append(b.current.Parts, map[string]any{"type": "tool", "step": step})
+		b.current.Steps = append(b.current.Steps, step)
+		if callID != "" {
+			if b.callIDMap == nil {
+				b.callIDMap = make(map[string]int)
+			}
+			b.callIDMap[callID] = len(b.current.Steps) - 1
+		}
+		return
+	}
+	b.flush()
+	stepID := "tool-1"
+	step := map[string]any{
+		"id":                             stepID,
+		"toolName":                       toolName,
+		"status":                         "running",
+		"output":                         map[string]any{"kind": "inline", "text": ""},
+		"duration":                       nil,
+		"requiresPermissionConfirmation": false,
+		"availablePermissionOptions":     []any{},
+	}
+	if toolInput != "" {
+		step["title"] = toolInput
+	}
+	b.current = &core.RichHistoryEntry{
+		Role:      "assistant",
+		Parts:     []map[string]any{{"type": "tool", "step": step}},
+		Steps:     []map[string]any{step},
+		Files:     []map[string]any{},
+		Timestamp: ts,
+	}
+	if callID != "" {
+		if b.callIDMap == nil {
+			b.callIDMap = make(map[string]int)
+		}
+		b.callIDMap[callID] = 0
+	}
+}
+
+func (b *richHistoryBuilder) addToolResult(ts time.Time, toolName, output, status string) {
+	if b.current == nil {
+		return
+	}
+	if len(b.current.Steps) == 0 {
+		return
+	}
+	stepIdx := len(b.current.Steps) - 1
+	step := b.current.Steps[stepIdx]
+	if status == "" {
+		status = "completed"
+	}
+	step["status"] = status
+	if output != "" {
+		step["output"] = map[string]any{"kind": "inline", "text": output}
+	}
+	if toolName != "" {
+		step["toolName"] = toolName
+	}
+	_ = ts
+}
+
+func (b *richHistoryBuilder) addToolResultByCallID(callID, output, status string) {
+	if b.current == nil {
+		return
+	}
+	if callID != "" {
+		idx, ok := b.callIDMap[callID]
+		if !ok || idx >= len(b.current.Steps) {
+			return
+		}
+		step := b.current.Steps[idx]
+		if status == "" {
+			status = "completed"
+		}
+		step["status"] = status
+		if output != "" {
+			step["output"] = map[string]any{"kind": "inline", "text": output}
+		}
+		return
+	}
+	b.addToolResult(time.Time{}, "", output, status)
+}
+
+func (b *richHistoryBuilder) addPatchResultByCallID(callID string, changes []core.FileChange, status string) {
+	if b.current == nil || len(changes) == 0 {
+		return
+	}
+	stepIdx := len(b.current.Steps) - 1
+	if callID != "" {
+		idx, ok := b.callIDMap[callID]
+		if ok && idx < len(b.current.Steps) {
+			stepIdx = idx
+		}
+	}
+	step := b.current.Steps[stepIdx]
+	if status == "" {
+		status = "completed"
+	}
+	step["toolName"] = "Patch"
+	step["status"] = status
+	step["output"] = map[string]any{"kind": "inline", "text": appServerFileChangeResult(changes)}
+	step["fileChanges"] = richHistoryFileChanges(changes)
+}
+
+func richHistoryFileChanges(changes []core.FileChange) []map[string]any {
+	if len(changes) == 0 {
+		return nil
+	}
+	items := make([]map[string]any, 0, len(changes))
+	for _, change := range changes {
+		path := strings.TrimSpace(change.Path)
+		if path == "" {
+			continue
+		}
+		item := map[string]any{
+			"path": path,
+			"kind": change.Kind,
+		}
+		if change.Diff != "" {
+			item["diff"] = change.Diff
+		}
+		if change.MovePath != "" {
+			item["movePath"] = change.MovePath
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
+}
+
+func (b *richHistoryBuilder) flush() {
+	if b.current != nil {
+		if len(b.current.Parts) == 0 {
+			b.current.Parts = []map[string]any{{"type": "text", "content": b.current.Content}}
+		}
+		b.entries = append(b.entries, *b.current)
+		b.current = nil
+		b.callIDMap = nil
+	}
+}
