@@ -137,6 +137,9 @@ func (c *RelayBridgeClient) closeConn() {
 
 	// 清理所有活跃的 relay device connections
 	for deviceID, rc := range c.devices {
+		if c.handlers != nil {
+			c.handlers.broadcaster.UnsubscribeAll(rc)
+		}
 		rc.Close()
 		delete(c.devices, deviceID)
 	}
@@ -174,6 +177,9 @@ func (c *RelayBridgeClient) Close() {
 
 	// 清理所有活跃的 relay device connections
 	for deviceID, rc := range c.devices {
+		if c.handlers != nil {
+			c.handlers.broadcaster.UnsubscribeAll(rc)
+		}
 		rc.Close()
 		delete(c.devices, deviceID)
 	}
@@ -341,12 +347,18 @@ func (c *RelayBridgeClient) handleClientHello(hello OnlineClientHello) {
 		c.SendEnvelope,
 	)
 
-	// 注册到 Broadcaster
-	c.handlers.broadcaster.RegisterConn(rc)
-
 	c.mu.Lock()
+	if stale := c.devices[deviceID]; stale != nil {
+		if c.handlers != nil {
+			c.handlers.broadcaster.UnsubscribeAll(stale)
+		}
+		_ = stale.Close()
+	}
 	c.devices[deviceID] = rc
 	c.mu.Unlock()
+
+	// 注册到 Broadcaster
+	c.handlers.broadcaster.RegisterConn(rc)
 
 	// 清理握手敏感数据
 	hs.Destroy()

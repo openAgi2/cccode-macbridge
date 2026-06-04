@@ -392,6 +392,41 @@ func TestOfflineMailboxFetchAckAndRevokeAPI(t *testing.T) {
 	}
 }
 
+func TestMailboxEpochIsStoredWithoutOnlineForward(t *testing.T) {
+	_, httpServer := newTestServer(t, 10)
+	credentials := provisionDevice(t, httpServer.URL)
+	bridge := wsDial(t, httpServer.URL, "/v1/routes/"+credentials.routeID+"/bridge", credentials.bridgeAuth)
+	defer bridge.Close()
+	device := wsDial(t, httpServer.URL, "/v1/routes/"+credentials.routeID+"/devices/phone-1", credentials.deviceAuth)
+	defer device.Close()
+
+	envelope := []byte(`{"routeId":"` + credentials.routeID + `","senderId":"bridge","destinationId":"phone-1","keyEpochId":"mailbox:0","ciphertext":"offline"}`)
+	if err := bridge.WriteMessage(websocket.TextMessage, envelope); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := device.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, payload, err := device.ReadMessage(); err == nil {
+		t.Fatalf("online device unexpectedly received mailbox epoch payload=%s", payload)
+	}
+
+	var mailbox struct {
+		Frames []MailboxFrame `json:"frames"`
+	}
+	response, data := requestJSON(t, http.MethodGet, httpServer.URL+"/v1/routes/"+credentials.routeID+"/devices/phone-1/mailbox", credentials.deviceAuth, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("mailbox status=%d body=%s", response.StatusCode, data)
+	}
+	if err := json.Unmarshal(data, &mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if len(mailbox.Frames) != 1 || string(mailbox.Frames[0].Envelope) != string(envelope) {
+		t.Fatalf("mailbox body=%s", data)
+	}
+}
+
 func TestPairingClaimLifecycle(t *testing.T) {
 	_, httpServer := newTestServer(t, 0)
 	credentials := provisionDevice(t, httpServer.URL)

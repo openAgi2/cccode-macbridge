@@ -59,6 +59,7 @@ type envelopeHeader struct {
 	RouteID       string `json:"routeId"`
 	SenderID      string `json:"senderId"`
 	DestinationID string `json:"destinationId"`
+	KeyEpochID    string `json:"keyEpochId"`
 }
 
 // handshakeHeader 用于路由非 envelope 格式的在线握手消息。
@@ -507,11 +508,13 @@ func (s *Server) readBridgeFrames(ctx context.Context, routeID string, peer *soc
 			s.closePeer(peer, websocket.ClosePolicyViolation, "invalid relay envelope")
 			return
 		}
-		if target := s.device(routeID, envelope.DestinationID); target != nil {
-			if err := target.write(payload); err == nil {
-				continue
+		if !strings.HasPrefix(envelope.KeyEpochID, "mailbox:") {
+			if target := s.device(routeID, envelope.DestinationID); target != nil {
+				if err := target.write(payload); err == nil {
+					continue
+				}
+				s.removeDevice(routeID, envelope.DestinationID, target)
 			}
-			s.removeDevice(routeID, envelope.DestinationID, target)
 		}
 		if _, evicted, err := s.store.AppendFrame(ctx, routeID, envelope.DestinationID, payload, time.Now(), s.config.MailboxTTL, s.config.MaxMailboxBytes); err != nil {
 			s.logger.Warn("relay mailbox append failed", "route", safeID(routeID), "device", safeID(envelope.DestinationID), "error", err)

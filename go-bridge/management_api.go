@@ -169,6 +169,8 @@ func (s *ManagementServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSetDisplayName(w, r)
 	case path == "/internal/remote/status" && r.Method == http.MethodGet:
 		s.handleRemoteStatus(w, r)
+	case path == "/internal/relay/delivery-prekeys" && r.Method == http.MethodGet:
+		s.handleRelayDeliveryPrekeys(w, r)
 	default:
 		writeMgmtJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error":   "not_found",
@@ -668,6 +670,40 @@ func (s *ManagementServer) handleRemoteStatus(w http.ResponseWriter, _ *http.Req
 	result["remoteConfigured"] = true
 	result["remoteAnalysis"] = analysis
 
+	writeMgmtJSON(w, http.StatusOK, result)
+}
+
+// ── GET /internal/relay/delivery-prekeys ───────────────────────────────────
+// 返回当前进程内 delivery prekey 水位。只读诊断端点，不暴露 prekey 内容。
+func (s *ManagementServer) handleRelayDeliveryPrekeys(w http.ResponseWriter, _ *http.Request) {
+	if s.cfg.Handlers == nil || s.cfg.Handlers.deliveryPrekeys == nil {
+		writeMgmtJSON(w, http.StatusOK, []map[string]interface{}{})
+		return
+	}
+	devices, err := s.cfg.DeviceStore.ListDevices()
+	if err != nil {
+		writeMgmtJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"error":   "list_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+	result := make([]map[string]interface{}, 0, len(devices))
+	for _, device := range devices {
+		status := s.cfg.Handlers.deliveryPrekeys.GetPrekeyStatus(device.DeviceID)
+		result = append(result, map[string]interface{}{
+			"deviceId":               device.DeviceID,
+			"displayName":            device.DisplayName,
+			"platform":               device.Platform,
+			"relayEnabled":           device.RelayEnabled,
+			"revoked":                device.RevokedAt != nil,
+			"availableCount":         status.AvailableCount,
+			"lowWatermark":           status.LowWatermark,
+			"targetCount":            status.TargetCount,
+			"maxCount":               status.MaxCount,
+			"relayChannelGeneration": device.RelayChannelGeneration,
+		})
+	}
 	writeMgmtJSON(w, http.StatusOK, result)
 }
 

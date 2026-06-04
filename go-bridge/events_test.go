@@ -443,6 +443,13 @@ func TestRelayEventsRoutesDurableMilestoneToOfflineRelayDevice(t *testing.T) {
 		t.Fatalf("UploadPrekeys error = %q", upload.Error)
 	}
 
+	// A relay device connection can remain registered after the phone has
+	// dropped off the relay path. Durable mailbox routing must not trust that
+	// broadcaster state as proof that the device received the milestone.
+	handlers.broadcaster.RegisterConn(&relayBroadcastCaptureConn{
+		device: &TrustedDeviceRecord{DeviceID: deviceID},
+	})
+
 	session := &fakeAgentSession{
 		id:     "ses_offline_route",
 		events: make(chan core.Event, 1),

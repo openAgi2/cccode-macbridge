@@ -1841,26 +1841,19 @@ func (h *Handlers) routeRelayOfflineEvent(sessionID, backendID, eventName string
 		slog.Warn("go-bridge: list relay devices for offline delivery failed", "error", err)
 		return
 	}
-	onlineSet := make(map[string]struct{})
 	onlineDevices := h.broadcaster.ActiveDeviceIDs()
-	for _, id := range onlineDevices {
-		onlineSet[id] = struct{}{}
-	}
-	offlineDevices := make([]string, 0, len(devices))
+	mailboxDevices := make([]string, 0, len(devices))
 	for _, device := range devices {
 		if device.RevokedAt != nil || !device.RelayEnabled || device.IdentityPublicKey == "" {
 			continue
 		}
-		if _, online := onlineSet[device.DeviceID]; online {
-			continue
-		}
-		offlineDevices = append(offlineDevices, device.DeviceID)
+		mailboxDevices = append(mailboxDevices, device.DeviceID)
 	}
-	if len(offlineDevices) == 0 {
+	if len(mailboxDevices) == 0 {
 		return
 	}
-	h.relayEventRouter.RouteEvent(sessionID, backendID, eventName, data, onlineDevices, offlineDevices)
-	for _, deviceID := range offlineDevices {
+	h.relayEventRouter.RouteEvent(sessionID, backendID, eventName, data, onlineDevices, mailboxDevices)
+	for _, deviceID := range mailboxDevices {
 		if err := h.relayOutbox.Flush(deviceID, sender); err != nil {
 			slog.Warn("go-bridge: relay offline delivery flush failed", "deviceID", safeID(deviceID), "error", err)
 		}
