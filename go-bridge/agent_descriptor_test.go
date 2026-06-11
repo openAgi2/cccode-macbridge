@@ -109,8 +109,8 @@ func TestCodexDescriptorBroadcastNoPolling(t *testing.T) {
 	}
 }
 
-func TestDescriptorDefaultStatusAvailable(t *testing.T) {
-	d := BuildAgentDescriptor("claude", &descriptorFakeAgent{name: "claudecode"}, "", nil)
+func TestUnknownDescriptorDefaultStatusAvailable(t *testing.T) {
+	d := BuildAgentDescriptor("custom", &descriptorFakeAgent{name: "custom"}, "", nil)
 	if d.Status != AgentStatusAvailable {
 		t.Fatalf("Status = %q, want available", d.Status)
 	}
