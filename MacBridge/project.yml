@@ -59,6 +59,7 @@ targets:
       macOS: "14.0"
     sources:
       - path: MacBridgeTests
+      - path: MacBridge/App/OpenCodeLaunchAgentCredentials.swift
     dependencies:
       - target: CCCodeBridge
     settings:

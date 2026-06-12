@@ -45,8 +45,8 @@ and stores the resulting route ID and credential locally.
 
 ## OpenCode First Launch
 
-MacBridge generates a random local OpenCode username and password on first
-launch and writes the matching desktop connection entry. A server process that
-was already running keeps its original environment and may return `401` until
-it is restarted with matching credentials. MacBridge reports that state
-directly instead of treating it as a successful backend connection.
+When an existing `com.opencode.server` LaunchAgent provides OpenCode
+credentials, MacBridge reuses them on first launch. Otherwise it generates a
+random local username and password and writes the matching desktop connection
+entry. MacBridge reports a `401` directly instead of treating an authentication
+mismatch as a successful backend connection.

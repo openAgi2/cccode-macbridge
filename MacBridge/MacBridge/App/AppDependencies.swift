@@ -39,6 +39,19 @@ class AppDependencies: ObservableObject {
             opencodePass = Self.readCredential("opencode_pass", from: dir) ?? ""
         }
 
+        // 已有常驻 OpenCode 服务时复用其 LaunchAgent 凭据。
+        // 全新安装不应生成另一套密码，让正在运行的服务返回 401。
+        if opencodeUser.isEmpty || opencodePass.isEmpty {
+            let launchAgentURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/LaunchAgents/com.opencode.server.plist")
+            if let existing = OpenCodeLaunchAgentCredentials.read(from: launchAgentURL) {
+                if opencodeUser.isEmpty { opencodeUser = existing.user }
+                if opencodePass.isEmpty { opencodePass = existing.password }
+                Self.writeCredentials(user: opencodeUser, pass: opencodePass, to: dir)
+                NSLog("[AppDependencies] Reused credentials from the existing OpenCode LaunchAgent.")
+            }
+        }
+
         // 首次运行或凭据为空时，自动生成随机凭据并保存
         if opencodeUser.isEmpty || opencodePass.isEmpty {
             opencodeUser = "opencode"
