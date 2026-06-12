@@ -16,6 +16,15 @@ targets:
       macOS: "14.0"
     sources:
       - path: MacBridge
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: "CCCode Bridge"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: "public.app-category.developer-tools"
+        LSUIElement: false
+        CCCODEOfficialRelayEndpoint: "wss://relay.byteseek.uk:8443"
     preBuildScripts:
       - name: Build go-bridge runtime
         basedOnDependencyAnalysis: false
@@ -29,10 +38,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.openagi.cccode.macbridge
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: "CCCode Bridge"
-        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
-        INFOPLIST_KEY_LSUIElement: NO
         CODE_SIGN_STYLE: Automatic
         ARCHS: arm64
   CCCodeBridgeTests:

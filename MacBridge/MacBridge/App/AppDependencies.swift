@@ -47,15 +47,15 @@ class AppDependencies: ObservableObject {
             NSLog("[AppDependencies] Automatically generated OpenCode credentials for first-time launch.")
         }
 
-        let relayEndpoint = OfficialRelayConfiguration.isAvailable
-            ? UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
-            : ""
-        let relayRouteID = OfficialRelayConfiguration.isAvailable
+        let configuredRelayEndpoint = OfficialRelayConfiguration.endpoint
+        let savedRelayEndpoint = UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
+        let hasCurrentRelayRoute = !configuredRelayEndpoint.isEmpty &&
+            savedRelayEndpoint == configuredRelayEndpoint
+        let relayEndpoint = hasCurrentRelayRoute ? configuredRelayEndpoint : ""
+        let relayRouteID = hasCurrentRelayRoute
             ? UserDefaults.standard.string(forKey: "relayRouteID") ?? ""
             : ""
-        let relayCredential = OfficialRelayConfiguration.isAvailable
-            ? RelayRouteCredentialStore.load()
-            : ""
+        let relayCredential = hasCurrentRelayRoute ? RelayRouteCredentialStore.load() : ""
 
         let config = RuntimeConfig(
             executablePath: executablePath,
@@ -118,12 +118,13 @@ class AppDependencies: ObservableObject {
                 do {
                     let relay = try await OfficialRelayProvisioner.shared.ensureRoute()
                     guard let self else { return }
-                    guard self.runtimeManager.config.relayEndpoint != OfficialRelayConfiguration.endpoint ||
+                    guard relay.endpoint == OfficialRelayConfiguration.endpoint else { return }
+                    guard self.runtimeManager.config.relayEndpoint != relay.endpoint ||
                             self.runtimeManager.config.relayRouteID != relay.routeID ||
                             self.runtimeManager.config.relayCredential != relay.credential else {
                         return
                     }
-                    self.runtimeManager.config.relayEndpoint = OfficialRelayConfiguration.endpoint
+                    self.runtimeManager.config.relayEndpoint = relay.endpoint
                     self.runtimeManager.config.relayRouteID = relay.routeID
                     self.runtimeManager.config.relayCredential = relay.credential
                     self.runtimeManager.restart()
@@ -140,17 +141,35 @@ class AppDependencies: ObservableObject {
         runtimeManager.config.remoteURL = remoteURL
         runtimeManager.config.includeTailscaleInPairing = UserDefaults.standard.object(forKey: "pairingIncludeTailscale") as? Bool ?? true
         runtimeManager.config.includeRemoteInPairing = UserDefaults.standard.object(forKey: "pairingIncludeRemote") as? Bool ?? true
-        runtimeManager.config.relayEndpoint = OfficialRelayConfiguration.isAvailable
-            ? UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
-            : ""
-        runtimeManager.config.relayRouteID = OfficialRelayConfiguration.isAvailable
+        let configuredRelayEndpoint = OfficialRelayConfiguration.endpoint
+        let savedRelayEndpoint = UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
+        let hasCurrentRelayRoute = !configuredRelayEndpoint.isEmpty &&
+            savedRelayEndpoint == configuredRelayEndpoint
+        runtimeManager.config.relayEndpoint = hasCurrentRelayRoute ? configuredRelayEndpoint : ""
+        runtimeManager.config.relayRouteID = hasCurrentRelayRoute
             ? UserDefaults.standard.string(forKey: "relayRouteID") ?? ""
             : ""
-        runtimeManager.config.relayCredential = OfficialRelayConfiguration.isAvailable
+        runtimeManager.config.relayCredential = hasCurrentRelayRoute
             ? RelayRouteCredentialStore.load()
             : ""
         runtimeManager.config.relayServiceAddress = UserDefaults.standard.string(forKey: "relayServiceAddress") ?? ""
         runtimeManager.restart()
+
+        if OfficialRelayConfiguration.isAvailable && !hasCurrentRelayRoute {
+            Task { [weak self] in
+                do {
+                    let relay = try await OfficialRelayProvisioner.shared.ensureRoute()
+                    guard let self else { return }
+                    guard relay.endpoint == OfficialRelayConfiguration.endpoint else { return }
+                    self.runtimeManager.config.relayEndpoint = relay.endpoint
+                    self.runtimeManager.config.relayRouteID = relay.routeID
+                    self.runtimeManager.config.relayCredential = relay.credential
+                    self.runtimeManager.restart()
+                } catch {
+                    NSLog("[AppDependencies] Relay 地址变更后启用失败: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     /// 凭据变更回调：重新读取 credentials.json，构造新 RuntimeConfig，重启 Bridge

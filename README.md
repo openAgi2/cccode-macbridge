@@ -21,8 +21,9 @@ authenticate the backends they want to expose:
 - Codex app-server.
 
 See `docs/backends-and-config.md` for configuration surfaces and placeholder
-environment examples. No production relay endpoint, route credential, pairing
-token, management token, or OpenCode password is committed in this repository.
+environment examples. The default hosted Relay endpoint is public configuration;
+route credentials, pairing tokens, management tokens, and OpenCode passwords are
+generated or stored locally and are not committed.
 
 ## Build
 
@@ -49,7 +50,6 @@ new clients.
 ## Release Status
 
 This repository is a clean split candidate. Public release still requires owner
-approval for signing identity, relay endpoint policy, Task E integration
-validation, and distribution process. The repository is licensed under
+approval for signing identity and distribution process. The repository is licensed under
 AGPL-3.0-only. See `docs/signing-and-release.md` and
 `docs/public-readiness.md`.

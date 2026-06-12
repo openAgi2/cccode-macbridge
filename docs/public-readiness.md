@@ -45,7 +45,8 @@ rg -n "(API[_-]?KEY|SECRET|TOKEN|PASSWORD|PRIVATE[_-]?KEY|PROVISION).*[=:][[:spa
 
 Result:
 
-- No known real relay endpoint, VPS IP, Apple team ID, private source path, handoff, or exec-plan marker was found.
+- The public default Relay endpoint is intentionally committed as non-secret configuration.
+- No Relay credential, VPS IP, Apple team ID, private source path, handoff, or exec-plan marker was found.
 - One password-pattern hit remains in `MacBridge/MacBridge/Services/RuntimeManager.swift`; it assigns the user-provided OpenCode password from runtime configuration into the child process environment and is not a hardcoded secret.
 
 ## CI
@@ -68,5 +69,4 @@ CI is configured for pull requests and pushes to `main`:
 ## Remaining Owner Decisions Before Public Release
 
 - Decide final bundle identifier, signing identity, hardened runtime, and notarization flow.
-- Decide the production Relay endpoint release-time injection policy.
 - Decide the notarized direct-download or other distribution release channel.

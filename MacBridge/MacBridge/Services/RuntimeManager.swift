@@ -845,15 +845,31 @@ enum RelayRouteCredentialStore {
 }
 
 struct OfficialRelayConfiguration {
-    static var endpoint: String {
+    private static let customEndpointKey = "customRelayEndpoint"
+
+    static var bundledEndpoint: String {
         (Bundle.main.object(forInfoDictionaryKey: "CCCODEOfficialRelayEndpoint") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static var customEndpoint: String {
+        UserDefaults.standard.string(forKey: customEndpointKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static var endpoint: String {
+        customEndpoint.isEmpty ? bundledEndpoint : customEndpoint
     }
 
     static var isAvailable: Bool {
         !endpoint.isEmpty
     }
 
+    static var isUsingCustomEndpoint: Bool {
+        !customEndpoint.isEmpty
+    }
+
+    let endpoint: String
     let routeID: String
     let credential: String
 }
@@ -879,23 +895,28 @@ actor OfficialRelayProvisioner {
     static let shared = OfficialRelayProvisioner()
 
     func ensureRoute() async throws -> OfficialRelayConfiguration {
-        guard OfficialRelayConfiguration.isAvailable else {
+        let endpoint = OfficialRelayConfiguration.endpoint
+        guard !endpoint.isEmpty else {
             throw OfficialRelayProvisioningError.unavailable
         }
         let defaults = UserDefaults.standard
         let savedEndpoint = defaults.string(forKey: "relayEndpoint") ?? ""
         let savedRouteID = defaults.string(forKey: "relayRouteID") ?? ""
         let savedCredential = RelayRouteCredentialStore.load()
-        if savedEndpoint == OfficialRelayConfiguration.endpoint,
+        if savedEndpoint == endpoint,
            !savedRouteID.isEmpty,
            !savedCredential.isEmpty {
-            return OfficialRelayConfiguration(routeID: savedRouteID, credential: savedCredential)
+            return OfficialRelayConfiguration(
+                endpoint: endpoint,
+                routeID: savedRouteID,
+                credential: savedCredential
+            )
         }
 
         let activation = try RelayActivationIdentityStore.loadOrCreate()
         let bridgeAuth = savedCredential.isEmpty ? try RelayActivationIdentityStore.newCredential() : savedCredential
         try RelayRouteCredentialStore.save(bridgeAuth)
-        guard var components = URLComponents(string: OfficialRelayConfiguration.endpoint) else {
+        guard var components = URLComponents(string: endpoint) else {
             throw OfficialRelayProvisioningError.invalidEndpoint
         }
         components.scheme = "https"
@@ -943,9 +964,13 @@ actor OfficialRelayProvisioner {
             let routeId: String
         }
         let provision = try JSONDecoder().decode(ProvisionResponse.self, from: data)
-        defaults.set(OfficialRelayConfiguration.endpoint, forKey: "relayEndpoint")
+        defaults.set(endpoint, forKey: "relayEndpoint")
         defaults.set(provision.routeId, forKey: "relayRouteID")
-        return OfficialRelayConfiguration(routeID: provision.routeId, credential: bridgeAuth)
+        return OfficialRelayConfiguration(
+            endpoint: endpoint,
+            routeID: provision.routeId,
+            credential: bridgeAuth
+        )
     }
 }
 

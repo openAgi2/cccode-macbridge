@@ -5,6 +5,8 @@ import SwiftUI
 struct RemoteAccessView: View {
     @State private var remoteURL = ""
     @AppStorage("remoteBridgeURL") private var savedRemoteURL = ""
+    @State private var customRelayEndpoint = ""
+    @AppStorage("customRelayEndpoint") private var savedCustomRelayEndpoint = ""
     @AppStorage("pairingIncludeTailscale") private var includeTailscale = true
     @AppStorage("pairingIncludeRemote") private var includeRemote = true
     @State private var relayConfigError: String?
@@ -45,6 +47,18 @@ struct RemoteAccessView: View {
         OfficialRelayConfiguration.isAvailable
     }
 
+    private var relayDisplayName: String {
+        OfficialRelayConfiguration.isUsingCustomEndpoint
+            ? "自定义加密 Relay"
+            : "官方加密 Relay"
+    }
+
+    private var normalizedCustomRelayEndpoint: String {
+        BridgeRemoteURLFormatter.normalize(
+            customRelayEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
     private var relayStatusText: String {
         if isRelayEnabled { return "已启用" }
         if !isOfficialRelayAvailable { return "未配置" }
@@ -69,6 +83,7 @@ struct RemoteAccessView: View {
             .frame(maxWidth: 760, alignment: .leading)
         }
         .task(id: apiClient?.baseURL.absoluteString) {
+            customRelayEndpoint = savedCustomRelayEndpoint
             await loadRemoteStatus()
         }
         .onChange(of: includeTailscale) { _, _ in
@@ -127,7 +142,7 @@ struct RemoteAccessView: View {
                 isToggleDisabled: true,
                 icon: "lock.shield",
                 iconColor: .green,
-                title: "官方加密 Relay",
+                title: relayDisplayName,
                 status: relayStatusText,
                 detail: relayConnectionDetail,
                 hint: isOfficialRelayAvailable
@@ -207,7 +222,7 @@ struct RemoteAccessView: View {
     private var relaySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("官方加密 Relay")
+                Text(relayDisplayName)
                     .font(.system(size: 15, weight: .semibold))
                 Spacer()
                 Text(relayStatusText)
@@ -218,10 +233,47 @@ struct RemoteAccessView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    TextField(OfficialRelayConfiguration.bundledEndpoint, text: $customRelayEndpoint)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 13, design: .monospaced))
+                        .onSubmit { saveCustomRelayEndpoint() }
+
+                    Button("保存自定义地址") {
+                        saveCustomRelayEndpoint()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(normalizedCustomRelayEndpoint == savedCustomRelayEndpoint)
+
+                    if OfficialRelayConfiguration.isUsingCustomEndpoint {
+                        Button("恢复默认") {
+                            restoreDefaultRelayEndpoint()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                Text(OfficialRelayConfiguration.isUsingCustomEndpoint
+                    ? "当前使用自定义 Relay：\(OfficialRelayConfiguration.endpoint)"
+                    : "默认 Relay：\(OfficialRelayConfiguration.bundledEndpoint)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if !normalizedCustomRelayEndpoint.isEmpty &&
+                    !isValidRelayURL(normalizedCustomRelayEndpoint) {
+                    Text("Relay 地址必须使用 wss://，并包含有效主机名。")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
             if isProvisioningRelay {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("正在启用官方 Relay...")
+                    Text("正在启用 Relay...")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -318,6 +370,34 @@ struct RemoteAccessView: View {
         NotificationCenter.default.post(name: .remoteURLDidChange, object: nil)
     }
 
+    private func saveCustomRelayEndpoint() {
+        let normalized = normalizedCustomRelayEndpoint
+        customRelayEndpoint = normalized
+        guard normalized.isEmpty || isValidRelayURL(normalized) else { return }
+        savedCustomRelayEndpoint = normalized
+        relayConfigError = nil
+        Task { await applySelectedRelayEndpoint() }
+    }
+
+    private func restoreDefaultRelayEndpoint() {
+        customRelayEndpoint = ""
+        savedCustomRelayEndpoint = ""
+        relayConfigError = nil
+        Task { await applySelectedRelayEndpoint() }
+    }
+
+    private func applySelectedRelayEndpoint() async {
+        guard !isProvisioningRelay else { return }
+        isProvisioningRelay = true
+        defer { isProvisioningRelay = false }
+        do {
+            _ = try await OfficialRelayProvisioner.shared.ensureRoute()
+            notifyPairingConfigChanged()
+        } catch {
+            relayConfigError = "Relay 地址启用失败：\(error.localizedDescription)"
+        }
+    }
+
     private func enableOfficialRelay() async {
         guard !isProvisioningRelay, !isRelayEnabled else { return }
         guard isOfficialRelayAvailable else {
@@ -343,6 +423,15 @@ struct RemoteAccessView: View {
             return false
         }
         return scheme == "ws" || scheme == "wss" || scheme == "https"
+    }
+
+    private func isValidRelayURL(_ value: String) -> Bool {
+        guard let url = URL(string: value),
+              url.scheme?.lowercased() == "wss",
+              url.host != nil else {
+            return false
+        }
+        return true
     }
 
     private func loadRemoteStatus() async {

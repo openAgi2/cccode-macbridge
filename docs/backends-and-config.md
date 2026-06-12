@@ -1,8 +1,8 @@
 # Backends And Configuration
 
-MacBridge ships with local development defaults only. Real relay endpoints,
-route credentials, OpenCode credentials, and signing credentials must be
-configured by the user or release owner outside Git.
+MacBridge ships with a default hosted Relay endpoint. Relay route credentials,
+OpenCode credentials, and signing credentials remain local and are never
+committed.
 
 ## Backend Requirements
 
@@ -24,16 +24,21 @@ Supported configuration surfaces:
   management tokens.
 - Private config files that are never committed.
 
-Use `config.example.env` as a placeholder reference. It intentionally contains
-no production relay endpoint, token, route ID, password, or signing identity.
+Use `config.example.env` as a placeholder reference for command-line runtime
+configuration. It intentionally contains no token, route ID, password, or
+signing identity.
 MacBridge passes sensitive runtime values through the child process environment
 instead of argv so they do not appear in ordinary process listings.
 
 ## Relay
 
-No public production relay is hardcoded in this repository. Users must either:
+The app defaults to `wss://relay.byteseek.uk:8443`. The endpoint is public
+configuration, not a credential. Users may:
 
 - Run direct local WebSocket pairing on the same network.
-- Self-host `relay-server` and enter that endpoint in MacBridge settings.
-- Use an owner-approved hosted relay that is documented outside the public
-  source tree.
+- Use the default hosted Relay.
+- Self-host `relay-server`, enter its `wss://` endpoint in MacBridge settings,
+  and later restore the built-in default with one action.
+
+When the selected endpoint changes, MacBridge registers a route with that Relay
+and stores the resulting route ID and credential locally.
