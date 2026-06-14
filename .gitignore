@@ -6,6 +6,7 @@
 /go-bridge/cccode-bridge-runtime
 /relay-server/relay-server
 /relay-server/cmd/relay-server/relay-server
+/relay-server/build/
 
 # Xcode and local build products
 /MacBridge/build/
