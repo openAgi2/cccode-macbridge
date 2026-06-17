@@ -19,3 +19,7 @@ xcuserdata/
 # Local runtime state
 *.log
 *.tmp
+
+# Agent memory files — local only, not shared via git
+CLAUDE.md
+AGENTS.md
