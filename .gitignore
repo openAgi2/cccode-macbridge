@@ -23,3 +23,11 @@ xcuserdata/
 # Agent memory files — local only, not shared via git
 CLAUDE.md
 AGENTS.md
+
+# docs/ work notes — local-only (plans/specs/reviews/completion reports)
+# All future docs/ additions stay local too. Already-tracked files are
+# unaffected by .gitignore. Re-include docs/protocol/ so the protocol
+# source-of-truth can still be added/updated; project docs (install/
+# release/signing) remain tracked as already-committed.
+/docs/*
+!/docs/protocol/
