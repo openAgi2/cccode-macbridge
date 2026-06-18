@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"github.com/openAgi2/cccode-macbridge/core"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -154,7 +155,8 @@ func (d *DataDir) WriteIdentity(id *BridgeIdentity) error {
 		return fmt.Errorf("序列化 identity 失败: %w", err)
 	}
 	data = append(data, '\n')
-	return os.WriteFile(d.IdentityPath(), data, 0o644)
+	// 原子写 + 0600（P2-5）。
+	return core.AtomicWriteFile(d.IdentityPath(), data, 0o600)
 }
 
 // ReadConfig 读取 config.json，内容不合法时返回 ConfigInvalidError。
@@ -193,7 +195,8 @@ func (d *DataDir) WriteConfig(c *ConfigData) error {
 		}
 		data = append(data, '\n')
 	}
-	return os.WriteFile(d.ConfigPath(), data, 0o644)
+	// 原子写 + 0600（P2-5）。
+	return core.AtomicWriteFile(d.ConfigPath(), data, 0o600)
 }
 
 // EnsureSubdirs 创建 pairing/ 和 logs/ 子目录（如不存在）。

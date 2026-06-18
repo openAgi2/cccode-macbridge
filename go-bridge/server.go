@@ -15,7 +15,10 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-const bridgeReadTimeout = 90 * time.Second // iOS ping interval 30s + timeout 20s = 最差 50s 检测断连，90s 服务端 deadline 有充足余量
+const (
+	bridgeReadTimeout    = 90 * time.Second // iOS ping interval 30s + timeout 20s = 最差 50s 检测断连，90s 服务端 deadline 有充足余量
+	maxInboundFrameBytes = int64(1 << 20)
+)
 
 // bridgeWriteTimeout 是所有客户端数据写（WriteJSON/WriteMessage）的写 deadline。
 // 用 var 而非 const：测试需要覆盖成短值（如 200ms）以避免等真实 10s。
@@ -263,6 +266,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Error("go-bridge: upgrade failed", "error", err)
 		return
 	}
+	ws.SetReadLimit(maxInboundFrameBytes)
 	conn := newConn(ws)
 	conn.authedDevice = authedDevice
 	directConnection := adaptDirectConn(conn)

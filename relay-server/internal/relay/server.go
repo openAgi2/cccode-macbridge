@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
@@ -20,7 +21,7 @@ import (
 )
 
 // relay 连接读写 deadline。写 deadline 从 10s 提到 120s：去分页后单次全量响应可达数 MB
-//（32MB 帧上限，加密+base64 后膨胀约 25%），WiFi(~10Mbps)传 32MB 需 ~26s，中等蜂窝需 ~120s，
+// （32MB 帧上限，加密+base64 后膨胀约 25%），WiFi(~10Mbps)传 32MB 需 ~26s，中等蜂窝需 ~120s，
 // 10s/60s 会误杀正常大帧传输。半开检测已由 go-bridge 独立应用层心跳(10s) + 本侧读 deadline(90s)
 // 覆盖，写 deadline 不再兼任主要半开检测职能。用 var 而非 const：测试覆盖成短值。
 var (
@@ -36,6 +37,7 @@ type Config struct {
 	MaxFrameBytes                int64
 	RateLimitPerMinute           int
 	ActivationRateLimitPerMinute int
+	TrustedProxyCIDRs            []string
 }
 
 func ProvisionTokenDigestFromHex(value string) ([]byte, error) {
@@ -52,6 +54,8 @@ type Server struct {
 	logger            *slog.Logger
 	limiter           *RateLimiter
 	activationLimiter *RateLimiter
+	trustedProxyNets  []*net.IPNet
+	nonces            *activationNonceCache
 	upgrader          websocket.Upgrader
 
 	mu      sync.Mutex
@@ -103,12 +107,18 @@ func NewServer(store *Store, config Config, logger *slog.Logger) (*Server, error
 	if logger == nil {
 		logger = slog.Default()
 	}
+	trustedProxyNets, err := parseTrustedProxyCIDRs(config.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		store:             store,
 		config:            config,
 		logger:            logger,
 		limiter:           NewRateLimiter(config.RateLimitPerMinute, time.Minute),
 		activationLimiter: NewRateLimiter(config.ActivationRateLimitPerMinute, time.Minute),
+		nonces:            newActivationNonceCache(),
+		trustedProxyNets:  trustedProxyNets,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(*http.Request) bool { return true },
 		},
@@ -125,7 +135,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"method", r.Method,
 			"path", requestAuditPath(r.URL.Path),
 			"status", status,
-			"remote", clientIP(r),
+			"remote", s.clientIP(r),
 			"duration_ms", time.Since(start).Milliseconds())
 	}()
 	parts := strings.FieldsFunc(r.URL.Path, func(value rune) bool { return value == '/' })
@@ -173,7 +183,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleActivateRoute(w http.ResponseWriter, r *http.Request) int {
-	if !s.activationLimiter.Allow("activation:"+clientIP(r), time.Now()) {
+	if !s.activationLimiter.Allow("activation:ip:"+s.clientIP(r), time.Now()) {
 		writeError(w, http.StatusTooManyRequests, "relay.rate_limited")
 		return http.StatusTooManyRequests
 	}
@@ -193,6 +203,10 @@ func (s *Server) handleActivateRoute(w http.ResponseWriter, r *http.Request) int
 		writeError(w, http.StatusBadRequest, "relay.invalid_activation")
 		return http.StatusBadRequest
 	}
+	if !s.activationLimiter.Allow("activation:install:"+input.InstallID, time.Now()) {
+		writeError(w, http.StatusTooManyRequests, "relay.rate_limited")
+		return http.StatusTooManyRequests
+	}
 	publicKey, err := base64.StdEncoding.DecodeString(input.PublicKey)
 	if err != nil || len(publicKey) != ed25519.PublicKeySize {
 		writeError(w, http.StatusBadRequest, "relay.invalid_activation")
@@ -205,9 +219,14 @@ func (s *Server) handleActivateRoute(w http.ResponseWriter, r *http.Request) int
 		writeError(w, http.StatusUnauthorized, "relay.activation_signature_failed")
 		return http.StatusUnauthorized
 	}
+	// P2-4：nonce 一次性语义。签名验证通过后再记录，避免无效签名消耗 nonce 造成 DoS。
+	if s.activationNonceSeen(input.InstallID, input.Nonce, time.Now()) {
+		writeError(w, http.StatusConflict, "relay.activation_replayed")
+		return http.StatusConflict
+	}
 	routeID, err := s.store.ActivateRoute(r.Context(), input.InstallID, publicKey, input.BridgeAuth, time.Now())
 	if err != nil {
-		s.logger.Warn("relay activation failed", "install", safeID(input.InstallID), "remote", clientIP(r), "error", err)
+		s.logger.Warn("relay activation failed", "install", safeID(input.InstallID), "remote", s.clientIP(r), "error", err)
 		writeError(w, http.StatusConflict, "relay.activation_conflict")
 		return http.StatusConflict
 	}
@@ -234,7 +253,7 @@ func (s *Server) handleRegisterRoute(w http.ResponseWriter, r *http.Request) int
 		return http.StatusTooManyRequests
 	}
 	if !hmac.Equal(s.config.ProvisionTokenDigest, CredentialDigest(bearer(r))) {
-		s.logger.Warn("relay auth failed", "operation", "route_register", "remote", clientIP(r))
+		s.logger.Warn("relay auth failed", "operation", "route_register", "remote", s.clientIP(r))
 		writeError(w, http.StatusUnauthorized, "relay.auth_failed")
 		return http.StatusUnauthorized
 	}
@@ -374,6 +393,10 @@ func (s *Server) handleSubmitPairingClaim(w http.ResponseWriter, r *http.Request
 	}
 	capHash := CredentialDigest(input.Capability)
 	if err := s.store.SubmitPairingClaim(r.Context(), routeID, input.ClaimID, capHash, input.SealedClaim, time.Now(), 5*time.Minute); err != nil {
+		if errors.Is(err, ErrPairingClaimConflict) {
+			writeError(w, http.StatusConflict, "relay.pairing_claim_conflict")
+			return http.StatusConflict
+		}
 		writeError(w, http.StatusInternalServerError, "relay.pairing_failed")
 		return http.StatusInternalServerError
 	}
@@ -680,7 +703,7 @@ func (s *Server) closePeer(peer *socketPeer, code int, reason string) {
 func (s *Server) authenticateBridge(r *http.Request, routeID string) bool {
 	ok := s.store.AuthenticateBridge(r.Context(), routeID, bearer(r), time.Now())
 	if !ok {
-		s.logger.Warn("relay auth failed", "operation", "bridge", "route", safeID(routeID), "remote", clientIP(r))
+		s.logger.Warn("relay auth failed", "operation", "bridge", "route", safeID(routeID), "remote", s.clientIP(r))
 	}
 	return ok
 }
@@ -688,13 +711,21 @@ func (s *Server) authenticateBridge(r *http.Request, routeID string) bool {
 func (s *Server) authenticateDevice(r *http.Request, routeID, deviceID string) bool {
 	ok := s.store.AuthenticateDevice(r.Context(), routeID, deviceID, bearer(r), time.Now())
 	if !ok {
-		s.logger.Warn("relay auth failed", "operation", "device", "route", safeID(routeID), "device", safeID(deviceID), "remote", clientIP(r))
+		s.logger.Warn("relay auth failed", "operation", "device", "route", safeID(routeID), "device", safeID(deviceID), "remote", s.clientIP(r))
 	}
 	return ok
 }
 
 func (s *Server) allow(r *http.Request, operation string) bool {
-	return s.limiter.Allow(operation+":"+clientIP(r), time.Now())
+	now := time.Now()
+	if !s.limiter.Allow(operation+":ip:"+s.clientIP(r), now) {
+		return false
+	}
+	parts := strings.FieldsFunc(r.URL.Path, func(value rune) bool { return value == '/' })
+	if len(parts) >= 3 && parts[0] == "v1" && parts[1] == "routes" {
+		return s.limiter.Allow(operation+":route:"+parts[2], now)
+	}
+	return true
 }
 
 func bearer(r *http.Request) string {
@@ -754,15 +785,81 @@ func writeError(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": code}})
 }
 
-func clientIP(r *http.Request) string {
-	if value := strings.TrimSpace(strings.Split(r.Header.Get("CF-Connecting-IP"), ",")[0]); value != "" {
-		return value
+func parseTrustedProxyCIDRs(values []string) ([]*net.IPNet, error) {
+	if len(values) == 0 {
+		values = []string{"127.0.0.0/8", "::1/128"}
 	}
+	result := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", value, err)
+		}
+		result = append(result, network)
+	}
+	return result, nil
+}
+
+// activationNonceTTL 是 nonce 一次性语义的有效窗口（与时间戳窗口一致）。
+const activationNonceTTL = 5 * time.Minute
+
+// activationNonceCache 是进程内 (install_id, nonce) 重放保护缓存（P2-4）。
+type activationNonceCache struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func newActivationNonceCache() *activationNonceCache {
+	return &activationNonceCache{seen: make(map[string]time.Time)}
+}
+
+// seenRecently 返回该 key 是否在 TTL 窗口内出现过，并（若未出现）记录之；惰性清理过期项。
+func (c *activationNonceCache) seenRecently(key string, now time.Time, ttl time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cutoff := now.Add(-ttl)
+	for k, at := range c.seen {
+		if at.Before(cutoff) {
+			delete(c.seen, k)
+		}
+	}
+	if _, ok := c.seen[key]; ok {
+		return true
+	}
+	c.seen[key] = now
+	return false
+}
+
+// activationNonceSeen 包装 seenRecently，组合 key。
+func (s *Server) activationNonceSeen(installID, nonce string, now time.Time) bool {
+	return s.nonces.seenRecently(installID+":"+nonce, now, activationNonceTTL)
+}
+
+func (s *Server) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
+	if err != nil {
+		host = r.RemoteAddr
 	}
-	return r.RemoteAddr
+	remoteIP := net.ParseIP(strings.TrimSpace(host))
+	if remoteIP != nil && ipInNetworks(remoteIP, s.trustedProxyNets) {
+		value := strings.TrimSpace(strings.Split(r.Header.Get("CF-Connecting-IP"), ",")[0])
+		if forwardedIP := net.ParseIP(value); forwardedIP != nil {
+			return forwardedIP.String()
+		}
+	}
+	if remoteIP != nil {
+		return remoteIP.String()
+	}
+	return host
+}
+
+func ipInNetworks(ip net.IP, networks []*net.IPNet) bool {
+	for _, network := range networks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func requestAuditPath(path string) string {

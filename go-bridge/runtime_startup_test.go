@@ -119,6 +119,8 @@ func TestErrorCodeConstants(t *testing.T) {
 		{RuntimeErrorPortBindFailed, "runtime_error.port_bind_failed"},
 		{RuntimeErrorNoAgents, "runtime_error.no_agents"},
 		{RuntimeErrorConfigInvalid, "runtime_error.config_invalid"},
+		{RuntimeErrorManagementBindFailed, "runtime.management_bind_failed"},
+		{RuntimeErrorManagementURLMissing, "runtime.management_url_missing"},
 	}
 	for _, tt := range tests {
 		if tt.constant != tt.want {

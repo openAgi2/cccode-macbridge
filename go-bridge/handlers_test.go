@@ -452,6 +452,123 @@ func TestSetPermissionModeAppliesToLiveSessionWhenSupported(t *testing.T) {
 	}
 }
 
+type readFileCaptureConn struct {
+	data interface{}
+	err  *WireError
+}
+
+func (c *readFileCaptureConn) SendJSON(any) {}
+func (c *readFileCaptureConn) SendResult(_ string, data interface{}, err *WireError) {
+	c.data = data
+	c.err = err
+}
+func (c *readFileCaptureConn) SendEvent(string, string, string, interface{}) {}
+func (c *readFileCaptureConn) AuthedDevice() *TrustedDeviceRecord            { return nil }
+func (c *readFileCaptureConn) RemoteAddr() string                            { return "test:read-file" }
+func (c *readFileCaptureConn) Close() error                                  { return nil }
+
+func TestReadFileEnforcesAuthorizedWorkspaceBoundary(t *testing.T) {
+	workspace := t.TempDir()
+	secretDir := t.TempDir()
+	allowedPath := filepath.Join(workspace, "main.go")
+	secretPath := filepath.Join(secretDir, "management-token")
+	envPath := filepath.Join(workspace, ".env")
+	linkPath := filepath.Join(workspace, "linked-secret")
+	if err := os.WriteFile(allowedPath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretPath, []byte("do-not-leak"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envPath, []byte("TOKEN=do-not-leak"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secretPath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	handlers := NewHandlers()
+	handlers.RegisterAgent("codex", &fakeAgent{name: "codex", workDir: workspace})
+
+	tests := []struct {
+		name     string
+		path     string
+		wantCode string
+	}{
+		{name: "absolute outside", path: secretPath, wantCode: "file.outside_authorized_root"},
+		{name: "relative traversal", path: filepath.Join("..", filepath.Base(secretDir), "management-token"), wantCode: "file.outside_authorized_root"},
+		{name: "symlink escape", path: linkPath, wantCode: "file.symlink_escape"},
+		{name: "sensitive workspace file", path: envPath, wantCode: "file.sensitive_path_denied"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := &readFileCaptureConn{}
+			handlers.handleReadFile(conn, WireMessage{
+				RequestID: "req_" + strings.ReplaceAll(tt.name, " ", "_"),
+				BackendID: "codex",
+				Params: mustJSONRaw(t, map[string]any{
+					"path":      tt.path,
+					"directory": workspace,
+				}),
+			})
+			if conn.err == nil || conn.err.Code != tt.wantCode {
+				t.Fatalf("error = %#v, want code %q", conn.err, tt.wantCode)
+			}
+			encoded, err := json.Marshal(struct {
+				Data interface{}
+				Err  *WireError
+			}{Data: conn.data, Err: conn.err})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), "do-not-leak") {
+				t.Fatalf("response leaked secret content: %s", encoded)
+			}
+		})
+	}
+
+	conn := &readFileCaptureConn{}
+	handlers.handleReadFile(conn, WireMessage{
+		RequestID: "req_allowed",
+		BackendID: "codex",
+		Params: mustJSONRaw(t, map[string]any{
+			"path":      allowedPath,
+			"directory": workspace,
+		}),
+	})
+	if conn.err != nil {
+		t.Fatalf("allowed read error = %#v", conn.err)
+	}
+	data, _ := conn.data.(map[string]interface{})
+	if got := data["content"]; got != "package main\n" {
+		t.Fatalf("content = %#v, want allowed file content; data=%#v", got, conn.data)
+	}
+}
+
+func TestReadFileFailsClosedWithoutServerAuthorizedWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "main.go")
+	if err := os.WriteFile(path, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	handlers := NewHandlers()
+	handlers.RegisterAgent("codex", &unsupportedMutationAgent{name: "codex"})
+	conn := &readFileCaptureConn{}
+
+	handlers.handleReadFile(conn, WireMessage{
+		RequestID: "req_no_root",
+		BackendID: "codex",
+		Params: mustJSONRaw(t, map[string]any{
+			"path":      path,
+			"directory": workspace,
+		}),
+	})
+	if conn.err == nil || conn.err.Code != "file.outside_authorized_root" {
+		t.Fatalf("error = %#v, want file.outside_authorized_root", conn.err)
+	}
+}
+
 func TestBackendListAdvertisesMemoryDiagnosticsAndUsageCapabilities(t *testing.T) {
 	handlers := NewHandlers()
 	handlers.RegisterAgent("claudecode", &fakeAgent{
@@ -2642,5 +2759,47 @@ func TestRunDiagnosticsReturnsNotSupportedWhenNoProvider(t *testing.T) {
 	}
 	if errObj["code"] != "not_supported" {
 		t.Fatalf("error code = %q, want not_supported", errObj["code"])
+	}
+}
+
+// TestReadFileAcceptsSubdirectoryWithinWorkspace 验证 P0-1 review 观察：
+// requestedDir 是授权 workspace 的子目录时应被接受（不误拒合法子目录调用），
+// workspace 外的目录仍被拒绝。
+func TestReadFileAcceptsSubdirectoryWithinWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	subDir := filepath.Join(workspace, "src")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+
+	cases := []struct {
+		name      string
+		requested string
+		wantErr   bool
+	}{
+		{"empty_dir_uses_root", "", false},
+		{"root_exact", workspace, false},
+		{"subdir_within_root", subDir, false},
+		{"outside_workspace", outside, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, err := matchAuthorizedReadFileRoot(workspace, c.requested)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("requestedDir=%q 应被拒绝", c.requested)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("requestedDir=%q 不应被拒绝: %v", c.requested, err)
+			}
+			// 返回的授权根始终是 workspace 根，而非子目录。
+			wantRoot, _ := canonicalExistingDirectory(workspace)
+			if root != wantRoot {
+				t.Fatalf("授权根 = %q, want %q", root, wantRoot)
+			}
+		})
 	}
 }

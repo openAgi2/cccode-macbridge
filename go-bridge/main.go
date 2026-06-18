@@ -2,7 +2,6 @@ package gobridge
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -45,6 +44,9 @@ func Main() {
 	logDirPath := flag.String("log-dir", "", "Log directory")
 	remoteURL := flag.String("remote-url", "", "外部可达的 Bridge WebSocket URL（如 wss://my-tailscale:8777/bridge）")
 	tlsPort := flag.Int("tls-port", 8778, "TLS listen port for wss:// remote access (0 = disabled)")
+	// devInsecureWS 仅用于本地开发：允许 Tailscale 远程候选在 TLS 不可用时降级为明文 ws://。
+	// 产品模式下不得启用——TLS 失败应禁用候选而非明文暴露 bearer token/业务内容（P1-4）。
+	devInsecureWS := flag.Bool("dev-insecure-ws", envOr("CCCODE_DEV_INSECURE_WS", "") != "", "DEV ONLY: allow plaintext ws:// Tailscale remote when TLS unavailable (fail-open). Product must leave unset.")
 	includeTailscale := flag.Bool("pairing-include-tailscale", true, "Include detected Tailscale URL in pairing QR")
 	includeRemote := flag.Bool("pairing-include-remote", true, "Include manual remote URL in pairing QR")
 
@@ -160,24 +162,12 @@ func Main() {
 	advertisedLocalURL := BuildBridgeLocalURL(ResolveAdvertisedHost(), *port)
 
 	// 自动检测 Tailscale IP 作为独立远程候选，不覆盖手动配置的 FRP/VPS URL。
-	// 使用 wss:// 和自签名证书，避免 iOS ATS 拦截 ws:// 明文连接。
-	var tlsCert *tls.Certificate
-	var tailscaleURL string
-	if tsIP := detectTailscaleIP(); tsIP != "" {
-		if *tlsPort > 0 {
-			cert, err := generateSelfSignedCert(tsIP)
-			if err != nil {
-				slog.Warn("go-bridge: 自签名证书生成失败，Tailscale 远程候选将使用 ws://", "error", err)
-				tailscaleURL = fmt.Sprintf("ws://%s:%d/bridge", tsIP, *port)
-			} else {
-				tlsCert = cert
-				tailscaleURL = fmt.Sprintf("wss://%s:%d/bridge", tsIP, *tlsPort)
-				slog.Info("go-bridge: 自动检测到 Tailscale IP，加入远程候选 (wss:// + 自签名证书)", "ip", tsIP, "tlsPort", *tlsPort)
-			}
-		} else {
-			tailscaleURL = fmt.Sprintf("ws://%s:%d/bridge", tsIP, *port)
-			slog.Info("go-bridge: 自动检测到 Tailscale IP，加入远程候选", "ip", tsIP)
-		}
+	// 决策逻辑见 resolveTailscaleRemote：产品模式 TLS 不可用不降级为 ws://（P1-4 fail-closed）。
+	tsDecision := resolveTailscaleRemote(detectTailscaleIP(), *tlsPort, *port, *devInsecureWS)
+	tlsCert := tsDecision.tlsCert
+	tailscaleURL := tsDecision.tailscaleURL
+	if tailscaleURL != "" {
+		slog.Info("go-bridge: Tailscale 远程候选已发布", "url", tailscaleURL)
 	}
 
 	// 管理 API 启动（仅 product 模式：management-host 和 management-token 都非空时启用）
@@ -227,11 +217,21 @@ func Main() {
 
 		actualPort, err := mgmtSrv.Start(*managementHost, *managementPort)
 		if err != nil {
-			slog.Error("go-bridge: 管理 API 启动失败", "error", err)
-		} else {
-			managementURL = fmt.Sprintf("http://%s:%d", *managementHost, actualPort)
-			slog.Info("go-bridge: 管理 API 就绪", "url", managementURL)
+			// P1-6: product 模式下管理 API 是必需依赖。监听失败应 fail-fast：
+			// 写结构化错误帧并退出，绝不写 ready frame（否则 Mac 端拿到空 managementUrl 只能静默卡住）。
+			slog.Error("go-bridge: 管理 API 启动失败，fail-fast 退出", "error", err)
+			WriteErrorFrame(RuntimeErrorManagementBindFailed, err.Error())
+			os.Exit(1)
 		}
+		managementURL = fmt.Sprintf("http://%s:%d", *managementHost, actualPort)
+		slog.Info("go-bridge: 管理 API 就绪", "url", managementURL)
+	}
+
+	// P1-6: product 模式（已配置 managementHost+token）下，ready frame 必须携带非空 managementUrl。
+	// 空地址意味着 Mac App 无法管理子进程，属致命启动契约违例。
+	if *managementHost != "" && *managementToken != "" && managementURL == "" {
+		WriteErrorFrame(RuntimeErrorManagementURLMissing, "product mode requires a non-empty managementUrl in the ready frame")
+		os.Exit(1)
 	}
 
 	server := NewServer(handlers)
@@ -290,7 +290,14 @@ func Main() {
 	http.Handle("/", server)
 
 	addr := fmt.Sprintf(":%d", *port)
-	httpServer := &http.Server{Addr: addr}
+	// P2-1: 主端口监听所有网卡，必须设握手超时/header 上限/空闲超时防 slowloris。
+	// 不设 WriteTimeout：会误杀长连接 WebSocket 数据面（gorilla 自带读写 deadline）。
+	httpServer := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		slog.Error("go-bridge: server listen failed", "error", err)
@@ -319,7 +326,12 @@ func Main() {
 		}
 		sharedRelayHub = NewRelayHub()
 		localRelayEndpoint = "ws://" + relayListener.Addr().String()
-		relayHTTPServer = &http.Server{Handler: NewRelayService(sharedRelayHub)}
+		relayHTTPServer = &http.Server{
+			Handler:           NewRelayService(sharedRelayHub),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    16 << 10,
+		}
 		go func() {
 			if serveErr := relayHTTPServer.Serve(relayListener); serveErr != nil && serveErr != http.ErrServerClosed {
 				slog.Error("relay-service: serve failed", "error", serveErr)
@@ -373,6 +385,9 @@ func Main() {
 		if tlsServer != nil {
 			_ = tlsServer.Shutdown(shutdownCtx)
 		}
+		if mgmtSrv != nil {
+			mgmtSrv.Shutdown()
+		}
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -391,7 +406,8 @@ func Main() {
 	// 持久化 management token — 必须在 WriteReadyFrame 之前，
 	// 否则 MacBridge 读到 runtime.json 但 token 文件还不存在。
 	if *dataDirPath != "" && *managementToken != "" {
-		if err := os.WriteFile(*dataDirPath+"/management-token", []byte(*managementToken), 0600); err != nil {
+		// 原子写 management-token（P2-5）：避免崩溃留下空/截断文件导致 Mac App 取不到 token。
+		if err := core.AtomicWriteFile(*dataDirPath+"/management-token", []byte(*managementToken), 0o600); err != nil {
 			slog.Error("go-bridge: management-token 写入失败", "error", err)
 		}
 	}

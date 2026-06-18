@@ -71,6 +71,13 @@ type ImageAttachment struct {
 	FileName string // original filename (optional)
 }
 
+// 附件文件名清理用的常量（P2-3），避免在字符串字面量中混用转义。
+const (
+	backslash      = "\\"
+	forwardSlash   = "/"
+	pathSeparators = "/\\:"
+)
+
 // FileAttachment represents a file (PDF, doc, spreadsheet, etc.) sent by the user.
 type FileAttachment struct {
 	MimeType string // e.g. "application/pdf", "text/plain"
@@ -92,11 +99,13 @@ func SaveFilesToDisk(workDir string, files []FileAttachment) []string {
 
 	var paths []string
 	for i, f := range files {
-		fname := f.FileName
-		if fname == "" {
-			fname = fmt.Sprintf("file_%d_%d", time.Now().UnixMilli(), i)
-		}
+		fname := safeAttachmentBaseName(f.FileName, i)
 		fpath := filepath.Join(attachDir, fname)
+		// P2-3: basename 化后再校验最终路径仍在 attachDir 内（防御 symlink/eval 场景）。
+		if !isWithinDir(attachDir, fpath) {
+			slog.Error("SaveFilesToDisk: rejected path escaping attachment dir", "name", f.FileName, "resolved", fpath)
+			continue
+		}
 		if err := os.WriteFile(fpath, f.Data, 0o644); err != nil {
 			slog.Error("SaveFilesToDisk: write failed", "error", err)
 			continue
@@ -105,6 +114,41 @@ func SaveFilesToDisk(workDir string, files []FileAttachment) []string {
 		slog.Debug("SaveFilesToDisk: file saved", "path", fpath, "name", f.FileName, "mime", f.MimeType, "size", len(f.Data))
 	}
 	return paths
+}
+
+// safeAttachmentBaseName 将客户端提供的文件名收敛为安全的 basename（P2-3）。
+// 拒绝绝对路径与 ../ 逃逸：只取 Base，并对 Windows 风格分隔符与盘符做兜底处理。
+// 空名或纯分隔符名回退为时间戳+索引的合成名。
+func safeAttachmentBaseName(name string, index int) string {
+	// 规范化 Windows 分隔符，避免 filepath.Base 在 unix 上漏判 "C:\\evil"。
+	cleaned := strings.ReplaceAll(name, backslash, forwardSlash)
+	base := filepath.Base(cleaned)
+	// filepath.Base("/") == "/"，filepath.Base("C:") == "C:" 等：回退。
+	if base == "" || base == "." || base == "/" || base == string(filepath.Separator) {
+		return fmt.Sprintf("file_%d_%d", time.Now().UnixMilli(), index)
+	}
+	// 再防御一层：若 base 仍含路径分隔符或盘符冒号，回退。
+	if strings.ContainsAny(base, pathSeparators) {
+		return fmt.Sprintf("file_%d_%d", time.Now().UnixMilli(), index)
+	}
+	return base
+}
+
+// isWithinDir 判断 target（已 Clean）是否位于 dir（已 Clean）之下。
+func isWithinDir(dir, target string) bool {
+	absDir, err := filepath.Abs(filepath.Clean(dir))
+	if err != nil {
+		return false
+	}
+	absTarget, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absTarget)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // AppendFileRefs appends file path references to a prompt string.

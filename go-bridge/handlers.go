@@ -53,6 +53,8 @@ type Handlers struct {
 	relayHelloHandler       func(conn Connection, msg *WireMessage)
 	claudeSessions          *claudeSessionCatalog
 	transcriptIndex         *transcriptindex.Store
+	// capabilityPolicy 是集中式 RPC 授权层（P3 架构演进，§3.2/§8）。
+	capabilityPolicy *CapabilityPolicy
 }
 
 type opencodeSessionOptions struct {
@@ -80,6 +82,7 @@ func NewHandlers() *Handlers {
 		relayEventRouter:       NewRelayEventRouter(observation, outbox, prekeys, NewMailboxService(NewRelayHub()), presentation),
 		claudeSessions:         newDefaultClaudeSessionCatalog(),
 		transcriptIndex:        transcriptindex.NewStore(defaultTranscriptIndexDir()),
+		capabilityPolicy:       NewCapabilityPolicy(),
 	}
 }
 
@@ -403,6 +406,12 @@ func (h *Handlers) HandleRPC(conn Connection, msg WireMessage) {
 			Code:    "auth.device_revoked",
 			Message: "设备授权已取消，请重新授权",
 		})
+		return
+	}
+
+	// P3：集中式 capability policy 在 dispatch 前评估敏感方法（§3.2/§8）。
+	if perr := h.capabilityPolicy.AuthorizeRPC(conn, msg); perr != nil {
+		conn.SendResult(msg.RequestID, nil, perr)
 		return
 	}
 
@@ -1579,7 +1588,8 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 	}
 	applySendMessageRuntimeOptions(agent, params)
 
-	slog.Info("go-bridge: handleSendMessage", "sessionID", params.SessionID, "contentLen", len(params.Content), "contentPreview", params.Content[:min(len(params.Content), 120)])
+	// P1-5: 默认日志不记录用户消息正文，仅记录长度，避免 prompt/源码/凭据进入日志、崩溃包或诊断。
+	slog.Info("go-bridge: handleSendMessage", "sessionID", params.SessionID, "contentLen", len(params.Content))
 	h.mu.Lock()
 	sess, ok := h.getSession(params.SessionID)
 	h.mu.Unlock()
@@ -3137,7 +3147,9 @@ const (
 
 func (h *Handlers) handleReadFile(conn Connection, msg WireMessage) {
 	var params struct {
-		Path string `json:"path"`
+		Path      string `json:"path"`
+		Directory string `json:"directory,omitempty"`
+		SessionID string `json:"sessionId,omitempty"`
 	}
 	if msg.Params != nil {
 		json.Unmarshal(msg.Params, &params)
@@ -3147,25 +3159,23 @@ func (h *Handlers) handleReadFile(conn Connection, msg WireMessage) {
 		return
 	}
 
-	// 安全检查：拒绝敏感路径
-	cleanPath := filepath.Clean(params.Path)
-	if cleanPath == "" || cleanPath == "." {
-		conn.SendResult(msg.RequestID, nil, &WireError{Code: "invalid_param", Message: "invalid path"})
-		return
-	}
-
-	// 检查文件是否存在且是普通文件
-	info, err := os.Stat(cleanPath)
+	authorizedRoot, err := h.authorizedReadFileRoot(msg, params.Directory, params.SessionID)
 	if err != nil {
-		conn.SendResult(msg.RequestID, nil, &WireError{Code: "file_not_found", Message: err.Error()})
-		return
-	}
-	if info.IsDir() {
-		conn.SendResult(msg.RequestID, nil, &WireError{Code: "is_directory", Message: "path is a directory"})
+		conn.SendResult(msg.RequestID, nil, &WireError{Code: "file.outside_authorized_root", Message: "file is outside the authorized workspace"})
 		return
 	}
 
-	// 大小限制
+	resolvedPath, info, err := resolveAuthorizedReadFilePath(authorizedRoot, params.Path)
+	if err != nil {
+		var wireErr *WireError
+		if errors.As(err, &wireErr) {
+			conn.SendResult(msg.RequestID, nil, wireErr)
+		} else {
+			conn.SendResult(msg.RequestID, nil, &WireError{Code: "file_not_found", Message: "file not found"})
+		}
+		return
+	}
+
 	if info.Size() > readFileMaxSize {
 		conn.SendResult(msg.RequestID, nil, &WireError{
 			Code:    "file_too_large",
@@ -3174,10 +3184,26 @@ func (h *Handlers) handleReadFile(conn Connection, msg WireMessage) {
 		return
 	}
 
-	// 读取文件内容
-	data, err := os.ReadFile(cleanPath)
+	file, err := os.Open(resolvedPath)
 	if err != nil {
-		conn.SendResult(msg.RequestID, nil, &WireError{Code: "read_failed", Message: err.Error()})
+		conn.SendResult(msg.RequestID, nil, &WireError{Code: "read_failed", Message: "failed to open file"})
+		return
+	}
+	defer file.Close()
+
+	openedInfo, err := file.Stat()
+	if err != nil || !os.SameFile(info, openedInfo) {
+		conn.SendResult(msg.RequestID, nil, &WireError{Code: "file.changed_during_read", Message: "file changed during authorization"})
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, readFileMaxSize+1))
+	if err != nil {
+		conn.SendResult(msg.RequestID, nil, &WireError{Code: "read_failed", Message: "failed to read file"})
+		return
+	}
+	if len(data) > readFileMaxSize {
+		conn.SendResult(msg.RequestID, nil, &WireError{Code: "file_too_large", Message: "file exceeds size limit"})
 		return
 	}
 
@@ -3198,14 +3224,143 @@ func (h *Handlers) handleReadFile(conn Connection, msg WireMessage) {
 	}
 
 	// 推断语言（用于前端高亮）
-	ext := strings.TrimPrefix(filepath.Ext(cleanPath), ".")
+	ext := strings.TrimPrefix(filepath.Ext(resolvedPath), ".")
 
 	conn.SendResult(msg.RequestID, map[string]interface{}{
-		"path":       cleanPath,
+		"path":       resolvedPath,
 		"content":    content,
 		"extension":  ext,
 		"sizeBytes":  len(data),
 		"totalLines": totalLines,
 		"truncated":  truncated,
 	}, nil)
+}
+
+func (h *Handlers) authorizedReadFileRoot(msg WireMessage, requestedDir, paramsSessionID string) (string, error) {
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		sessionID = paramsSessionID
+	}
+	if sessionID != "" {
+		if dir := h.sessions.directoryForSession(sessionID); dir != "" {
+			return matchAuthorizedReadFileRoot(dir, requestedDir)
+		}
+	}
+
+	agent, ok := h.getAgent(msg.BackendID)
+	if !ok {
+		return "", errors.New("backend not found")
+	}
+	workDirAgent, ok := agent.(core.WorkDirSwitcher)
+	if !ok || workDirAgent.GetWorkDir() == "" {
+		return "", errors.New("backend has no authorized workspace")
+	}
+	return matchAuthorizedReadFileRoot(workDirAgent.GetWorkDir(), requestedDir)
+}
+
+func matchAuthorizedReadFileRoot(serverRoot, requestedDir string) (string, error) {
+	root, err := canonicalExistingDirectory(serverRoot)
+	if err != nil {
+		return "", err
+	}
+	if requestedDir == "" {
+		return root, nil
+	}
+	requested, err := canonicalExistingDirectory(requestedDir)
+	if err != nil {
+		return "", errors.New("requested directory is not within the authorized workspace")
+	}
+	// 授权根始终是 serverRoot（workspace 根）。requestedDir 可能等于 root，也可能是 root 的子目录
+	// （前端浏览子目录时传入）。只要 requested 在 root 之内即接受，避免误拒合法子目录调用；
+	// 越界（requested 在 root 之外）才拒绝。真正的越界校验对最终读取的 path 仍由 resolveAuthorizedReadFilePath 完成。
+	if requested != root && !pathIsWithinRoot(root, requested) {
+		return "", errors.New("requested directory is outside the authorized workspace")
+	}
+	return root, nil
+}
+
+func canonicalExistingDirectory(path string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("authorized workspace is not a directory")
+	}
+	return resolved, nil
+}
+
+func resolveAuthorizedReadFilePath(root, requestedPath string) (string, os.FileInfo, error) {
+	cleanPath := filepath.Clean(requestedPath)
+	if cleanPath == "" || cleanPath == "." {
+		return "", nil, &WireError{Code: "invalid_param", Message: "invalid path"}
+	}
+
+	candidate := cleanPath
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(root, candidate)
+	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", nil, &WireError{Code: "file.outside_authorized_root", Message: "file is outside the authorized workspace"}
+	}
+	resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(candidateAbs))
+	if err != nil || !pathIsWithinRoot(root, filepath.Join(resolvedParent, filepath.Base(candidateAbs))) {
+		return "", nil, &WireError{Code: "file.outside_authorized_root", Message: "file is outside the authorized workspace"}
+	}
+
+	resolved, err := filepath.EvalSymlinks(candidateAbs)
+	if err != nil {
+		return "", nil, err
+	}
+	if !pathIsWithinRoot(root, resolved) {
+		return "", nil, &WireError{Code: "file.symlink_escape", Message: "file symlink escapes the authorized workspace"}
+	}
+	if isSensitiveReadFilePath(resolved) {
+		return "", nil, &WireError{Code: "file.sensitive_path_denied", Message: "sensitive file access is denied"}
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, &WireError{Code: "invalid_file_type", Message: "path is not a regular file"}
+	}
+	return resolved, info, nil
+}
+
+func pathIsWithinRoot(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func isSensitiveReadFilePath(path string) bool {
+	lowerPath := strings.ToLower(filepath.Clean(path))
+	base := filepath.Base(lowerPath)
+	switch base {
+	case "management-token", "relay_identity.key", "devices.json":
+		return true
+	}
+	if base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
+
+	parts := strings.Split(filepath.ToSlash(lowerPath), "/")
+	for i, part := range parts {
+		switch part {
+		case ".ssh", ".aws", ".claude", ".codex":
+			return true
+		case ".config":
+			if i+1 < len(parts) && (parts[i+1] == "gcloud" || parts[i+1] == "opencode") {
+				return true
+			}
+		}
+	}
+	return false
 }

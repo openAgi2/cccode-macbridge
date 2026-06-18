@@ -15,7 +15,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: go install github.com/zricethezav/gitleaks/v8@latest
+      # P2-6: 固定 gitleaks 版本（不用 @latest），避免每次 CI 解析不同版本、破坏可复现性。
+      - run: go install github.com/zricethezav/gitleaks/v8@v8.21.2
       - run: gitleaks git --redact --config .gitleaks.toml .
       - run: gitleaks dir --redact --config .gitleaks.toml .
 
@@ -29,6 +30,11 @@ jobs:
       - run: go build ./go-bridge
       - run: go test ./go-bridge/... -count=1
       - run: go test ./... -count=1
+        working-directory: relay-server
+      # P2-6: 依赖漏洞扫描。govulncheck 仅报告实际可达的漏洞，降低噪音。
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./go-bridge/...
+      - run: govulncheck ./...
         working-directory: relay-server
 
   macbridge:

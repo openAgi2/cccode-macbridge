@@ -60,7 +60,7 @@ struct RuntimeConfig {
         codexAppServerURL: String = "ws://127.0.0.1:4141",
         opencodeUser: String = "",
         opencodePass: String = "",
-        logFilePath: String = "/tmp/go-bridge.log",
+        logFilePath: String = "",
         cliSearchPath: [String] = Self.defaultCLISearchPath(),
         remoteURL: String = "",
         includeTailscaleInPairing: Bool = true,
@@ -217,8 +217,11 @@ class RuntimeManager: ObservableObject {
 
     private func launchBridgeProcess() {
         // 确保目录存在
-        try? FileManager.default.createDirectory(atPath: config.dataDir, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(atPath: config.logDir, withIntermediateDirectories: true)
+        // P2-8: data/log 目录创建后收紧为 0700（仅 owner 可访问）。
+        try? FileManager.default.createDirectory(atPath: config.dataDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.createDirectory(atPath: config.logDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: config.dataDir)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: config.logDir)
         try? FileManager.default.removeItem(atPath: config.dataDir + "/runtime.json")
         configureOpenCodeDesktopServerIfNeeded()
         guard prepareRuntimeOwnershipForLaunch() else { return }
@@ -442,11 +445,23 @@ class RuntimeManager: ObservableObject {
             )
         }.value
 
+        // 必需字段就位后再判断 managementUrl：port/pid/token 都匹配但 managementUrl 缺失，
+        // 属致命启动契约违例（P1-6）。不能静默卡在 starting 反复轮询，必须显式报错。
         guard let frame = bootstrap.frame,
               frame.port == config.port,
-              expectedPID == nil || frame.pid == Int(expectedPID ?? 0),
-              let mgmtURL = frame.managementUrl, !mgmtURL.isEmpty,
-              let token = bootstrap.token, !token.isEmpty else {
+              expectedPID == nil || frame.pid == Int(expectedPID ?? 0) else {
+            return
+        }
+        guard let token = bootstrap.token, !token.isEmpty else {
+            return
+        }
+        guard let mgmtURL = frame.managementUrl, !mgmtURL.isEmpty else {
+            // ready frame 已就位但 managementUrl 为空：Go runtime 本应在 product 模式 fail-fast
+            // 而不发 ready。走到这里说明启动契约被破坏，判定为致命错误而非可恢复 starting。
+            if status == .starting {
+                lastError = "Bridge 启动契约错误：ready frame 缺少 managementUrl (runtime.management_url_missing)。请重启 Bridge。"
+                setStatus(.crashed, "Bridge 启动失败：缺少管理接口")
+            }
             return
         }
 
@@ -478,6 +493,32 @@ class RuntimeManager: ObservableObject {
     }
 
     // MARK: - 状态辅助
+
+    /// rotateLogFileIfNeeded 按大小滚动日志：超过 maxLogBytes 时把当前文件移为 .1，
+    /// 最多保留 maxLogGenerations 代（P2-8 日志治理）。
+    private static let maxLogBytes: Int64 = 8 * 1024 * 1024   // 8 MiB
+    private static let maxLogGenerations = 3
+
+    private func rotateLogFileIfNeeded(path: String) {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? Int64 else { return }
+        guard size >= Self.maxLogBytes else { return }
+        let oldest = "\(path).\(Self.maxLogGenerations)"
+        if fm.fileExists(atPath: oldest) {
+            try? fm.removeItem(atPath: oldest)
+        }
+        for gen in stride(from: Self.maxLogGenerations - 1, through: 1, by: -1) {
+            let from = "\(path).\(gen)"
+            let to = "\(path).\(gen + 1)"
+            if fm.fileExists(atPath: from) {
+                try? fm.moveItem(atPath: from, toPath: to)
+            }
+        }
+        if fm.fileExists(atPath: path) {
+            try? fm.moveItem(atPath: path, toPath: "\(path).1")
+        }
+    }
 
     private func resetRuntimeState() {
         managementURL = nil
@@ -754,7 +795,13 @@ class RuntimeManager: ObservableObject {
         logFileHandle?.closeFile()
         logFileHandle = nil
 
-        FileManager.default.createFile(atPath: path, contents: nil)
+        // P2-8: 拒绝 symlink 日志路径，防止被替换指向任意文件；并按大小滚动。
+        rotateLogFileIfNeeded(path: path)
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           attrs[.type] as? FileAttributeType == .typeSymbolicLink {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600])
         guard let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) else { return }
         logFileHandle = handle
         pipe.fileHandleForReading.readabilityHandler = { fh in
