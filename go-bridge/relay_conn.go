@@ -45,6 +45,11 @@ type RelayDeviceConn struct {
 
 	// 状态
 	closed bool
+
+	// lastActivity 记录最后一次从该 device 收到有效数据的时间（unix nano）。
+	// 由 handleInboundEnvelope 在解密成功后更新；心跳循环据此做半开检测：
+	// 长期无 device→Mac 数据即判定连接死，主动清理（而非被动僵死，也非靠重试掩盖）。
+	lastActivity atomic.Int64
 }
 
 var _ Connection = (*RelayDeviceConn)(nil)
@@ -72,7 +77,19 @@ func NewRelayDeviceConn(
 	// 双方向 counter 从 1 开始
 	rc.sendCounter.Store(1)
 	rc.recvCounter.Store(1)
+	rc.lastActivity.Store(time.Now().UnixNano())
 	return rc
+}
+
+// touchLastActivity 记录最后一次从该 device 收到有效数据的时间。
+// 在 handleInboundEnvelope 解密成功后调用，是半开检测的输入。
+func (rc *RelayDeviceConn) touchLastActivity() {
+	rc.lastActivity.Store(time.Now().UnixNano())
+}
+
+// lastActivityAt 返回最后一次收到该 device 数据的时间。
+func (rc *RelayDeviceConn) lastActivityAt() time.Time {
+	return time.Unix(0, rc.lastActivity.Load())
 }
 
 // SendJSON 将业务消息加密为 relay envelope 并发送。

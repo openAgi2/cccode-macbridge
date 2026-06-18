@@ -448,6 +448,11 @@ func (h *Handlers) HandleRelayInbound(conn Connection, rawJSON json.RawMessage) 
 		} else {
 			slog.Warn("handlers: relay hello handler not configured, dropping hello")
 		}
+	case msg.Type == "ping":
+		// 应用层 ping/pong（走 data frame，CF 必透传；与直连路径 server.go 对称）。
+		// iOS 经 relay 的判活改用应用层 ping/pong 后，靠此回包；不依赖被 CF 代理/干扰的
+		// WebSocket control-frame ping/pong。
+		conn.SendJSON(map[string]string{"type": "pong"})
 	case msg.Type == "request" && msg.Method != "":
 		h.HandleRPC(conn, msg)
 	default:
