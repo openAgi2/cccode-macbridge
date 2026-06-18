@@ -20,8 +20,20 @@ var (
 	relayPingPeriod  = 30 * time.Second
 	relayReadTimeout = 90 * time.Second
 
-	// relayWriteTimeout 是 relay bridge WebSocket 所有数据写的写 deadline（对齐 10s）。
-	relayWriteTimeout = 10 * time.Second
+	// relayWriteTimeout 是 relay bridge WebSocket 所有数据写的写 deadline。
+	// 从 10s 提到 120s：去分页后单次全量响应可达数 MB（32MB 帧上限），WiFi 传大帧需 ~26s，
+	// 中等蜂窝需 ~120s，10s 会误杀正常大帧。与 relay-server relayWriteDeadline 对齐。
+	relayWriteTimeout = 120 * time.Second
+
+	// relayDeviceHeartbeatPeriod：Mac 主动给每个活跃 device 发应用层心跳（type:ping data frame）的周期。
+	// 取 10s：既 < iOS 30s 判活周期、为 iOS 应用层 ping/pong 判活提供 inbound，又 < 移动网络 CGNAT
+	// 30~60s 空闲超时，维持 iPhone↔CF↔relay 全链路流量。心跳走 data frame，Cloudflare 必须透传，
+	// 不受其对 WebSocket control-frame ping/pong 的代理/干扰影响。
+	relayDeviceHeartbeatPeriod = 10 * time.Second
+
+	// relayDeviceDeadAfter：device→Mac 方向无任何有效数据超过该时长即判定连接死，主动清理。
+	// 取 120s（iOS 应用层 ping 周期 30s 的 4 倍，容忍丢包与网络抖动）。这是死连接回收，非重试掩盖。
+	relayDeviceDeadAfter = 120 * time.Second
 )
 
 // RelayBridgeClient 是 Mac bridge 连接到 Relay 服务的客户端。
@@ -83,6 +95,8 @@ func (c *RelayBridgeClient) Connect(relayBridgeURL string) error {
 	// 回环为同步）。同时保证单次连接生命周期内保活参数一致。
 	readTimeout := relayReadTimeout
 	pingPeriod := relayPingPeriod
+	heartbeatPeriod := relayDeviceHeartbeatPeriod
+	deviceDeadAfter := relayDeviceDeadAfter
 
 	// 保活（P0-B）：读 deadline + pong handler + 主动 ping ticker。
 	// relay WebSocket 不再依赖 OS TCP keepalive（~2h）"假活"。无 pong 时读 deadline 到期
@@ -97,6 +111,7 @@ func (c *RelayBridgeClient) Connect(relayBridgeURL string) error {
 		c.handlers.FlushRelayOutboxes()
 	}
 	go c.pingLoop(done, pingPeriod)
+	go c.heartbeatLoop(done, heartbeatPeriod, deviceDeadAfter)
 	go c.readLoop()
 	return nil
 }
@@ -297,6 +312,71 @@ func (c *RelayBridgeClient) pingLoop(done <-chan struct{}, period time.Duration)
 	}
 }
 
+// heartbeatLoop 周期性给每个活跃 device 发应用层心跳（type:ping data frame），并做半开检测。
+//
+// 为什么需要它：relay device 连接在空闲期若完全无流量，移动网络 CGNAT（30~60s）与 CF edge
+// 会断连；而 iOS 判活改用应用层 ping/pong 后，双向 data frame 心跳既能维持 iPhone↔CF↔relay
+// 全链路流量，又能可靠检测半开（device 长期无回包即死）。心跳走 data frame（非 WebSocket
+// control frame），Cloudflare 必须透传，不受其对 ping/pong control frame 的代理/干扰影响。
+//
+// done 随 readLoop 退出而关闭，保证重连后不泄漏旧 goroutine。period/deadAfter 由 Connect 在
+// 调用方 goroutine 读取传入（避免子 goroutine 读包级 var 与测试覆盖 race，与 pingLoop 一致）。
+func (c *RelayBridgeClient) heartbeatLoop(done <-chan struct{}, period, deadAfter time.Duration) {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			c.sendDeviceHeartbeats(deadAfter)
+		}
+	}
+}
+
+// sendDeviceHeartbeats 给每个活跃 device 发心跳，并清理长期无活动的死连接。
+// 先快照 devices map 再释放锁，避免发送/关闭（IO）期间持锁。
+func (c *RelayBridgeClient) sendDeviceHeartbeats(deadAfter time.Duration) {
+	c.mu.Lock()
+	snapshot := make([]*RelayDeviceConn, 0, len(c.devices))
+	for _, rc := range c.devices {
+		snapshot = append(snapshot, rc)
+	}
+	c.mu.Unlock()
+
+	now := time.Now()
+	for _, rc := range snapshot {
+		// 半开检测：长期无 device→Mac 数据即判死，主动清理（不掩盖、不靠重试）。
+		if idle := now.Sub(rc.lastActivityAt()); idle > deadAfter {
+			c.pruneDeadDevice(rc, idle)
+			continue
+		}
+		// 应用层心跳（data frame，CF 必透传）。维持全链路流量防 CGNAT/CF 空闲断连，
+		// 并为 iOS 应用层 ping/pong 判活提供 inbound（更新 lastInboundAt，跳过 control ping）。
+		rc.SendJSON(map[string]string{"type": "ping"})
+	}
+}
+
+// pruneDeadDevice 清理一个被判死的 device 连接：仅当 map 中仍是同一对象时移除，再取消
+// broadcaster 订阅、关闭。device 侧重连握手时由 handleClientHello 重建，而非僵死占用。
+func (c *RelayBridgeClient) pruneDeadDevice(rc *RelayDeviceConn, idle time.Duration) {
+	c.mu.Lock()
+	current, ok := c.devices[rc.deviceID]
+	if !ok || current != rc {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.devices, rc.deviceID)
+	c.mu.Unlock()
+
+	if c.handlers != nil {
+		c.handlers.broadcaster.UnsubscribeAll(rc)
+	}
+	rc.Close()
+	slog.Info("relay-bridge-client: pruned inactive device connection",
+		"deviceID", safeID(rc.deviceID), "idle", idle)
+}
+
 // handleClientHello 处理来自 iOS 设备的在线握手请求。
 func (c *RelayBridgeClient) handleClientHello(hello OnlineClientHello) {
 	deviceID := hello.DeviceID
@@ -463,6 +543,9 @@ func (c *RelayBridgeClient) handleInboundEnvelope(payload []byte) {
 		"counter", env.Counter,
 		"payloadLen", len(innerJSON),
 	)
+
+	// 更新该 device 的最后活动时间，供心跳循环做半开检测。
+	rc.touchLastActivity()
 
 	// 分发给 handlers 处理
 	if c.handlers != nil {

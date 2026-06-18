@@ -18,14 +18,16 @@ import (
 	"github.com/openAgi2/cccode-macbridge/transcriptindex"
 )
 
-// Pagination defaults. The per-page byte budget leaves room below Relay's 1 MiB
-// WebSocket limit for encrypted envelope metadata. Message-count paging alone
-// cannot bound payload for sessions with a giant tool output, so the page is
-// also trimmed by encoded wire bytes.
+// Pagination defaults. The per-page byte budget keeps each response small enough to
+// traverse a fragile mobile↔CF↔relay link inside one heartbeat window: 接近 1MB 的大页在
+// 蜂窝+CF 链路上传输耗时数秒，期间任一网络抖动都会中断传输并触发重连（"长 session 分页
+// 必重连"的直接来源）。256KB 在 ~1Mbps 蜂窝下约 2s 传完，远小于 iOS 应用层判活周期，且远低于
+// Relay 2MB 帧上限。Message-count paging alone cannot bound payload for sessions with a giant
+// tool output, so the page is also trimmed by encoded wire bytes.
 const (
 	defaultPageSize      = 50
 	maxPageSize          = 200
-	maxPageResponseBytes = 960 << 10
+	maxPageResponseBytes = 256 << 10
 )
 
 // defaultTranscriptIndexDir returns the default persistence root for transcript
@@ -200,6 +202,28 @@ func (h *Handlers) servePaginatedMessages(
 		}
 		wire = append(wire, message)
 	}
+	wire = trimWireToBudget(wire)
+
+	kept := len(wire)
+	dropped := len(entries) - kept
+	oldestOrdinal := pageSpans[dropped].Ordinal // entries/pageSpans are ascending
+	return paginatedEnvelope(wire, params.SessionID, idx, oldestOrdinal), nil, true
+}
+
+// trimWireToBudget enforces the per-page byte budget on wire-encoded messages:
+// compact duplicate fields first, then drop the oldest (lowest-index) messages
+// until under maxPageResponseBytes. At least one message is always retained.
+//
+// Shared between the paginated path (servePaginatedMessages) and the full-parse
+// fallback (handlers.go). The fallback used to return the entire session history
+// unbounded — e.g. 1.3MB / 77 msgs when transcript-index replay mismatched on a
+// long session — which made iOS re-render the whole list on every repeated load
+// (UI 跳动). Bounding it keeps each load small and stable even before the
+// replay-mismatch root cause is fixed. This is a bounded fallback, not a silent
+// truncation: the paginated path still returns full history via cursor paging
+// when the transcript index is healthy; only the mismatch-fallback path drops
+// older messages to stay within the transport budget.
+func trimWireToBudget(wire []map[string]interface{}) []map[string]interface{} {
 	if total, _ := json.Marshal(wire); len(total) > maxPageResponseBytes {
 		for _, message := range wire {
 			compactDuplicateMessageFields(message)
@@ -212,11 +236,7 @@ func (h *Handlers) servePaginatedMessages(
 		}
 		wire = wire[1:]
 	}
-
-	kept := len(wire)
-	dropped := len(entries) - kept
-	oldestOrdinal := pageSpans[dropped].Ordinal // entries/pageSpans are ascending
-	return paginatedEnvelope(wire, params.SessionID, idx, oldestOrdinal), nil, true
+	return wire
 }
 
 // compactDuplicateMessageFields removes top-level text copies only when the

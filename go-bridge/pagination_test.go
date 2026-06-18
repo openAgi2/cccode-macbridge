@@ -175,7 +175,7 @@ func TestPaginatedMessages_CompactsDuplicateLargeMessageFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(sessionDir, "rollout-2026-01-01T00-00-00-"+sessionID+".jsonl")
-	largeText := strings.Repeat("x", 900000)
+	largeText := strings.Repeat("x", 200000) // 200KB: 落在新预算 256KB 内，验证 compaction 去重后单条仍受预算约束
 	content := fmt.Sprintf(
 		"{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":\"/tmp\"}}\n"+
 			"{\"timestamp\":\"2026-01-01T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"role\":\"assistant\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}}\n",

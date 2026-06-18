@@ -50,7 +50,7 @@ func newTestServer(t *testing.T, rate int) (*Server, *httptest.Server) {
 	return server, httpServer
 }
 
-func TestNewServerDefaultsFrameLimitForEncryptedPagination(t *testing.T) {
+func TestNewServerDefaultsFrameLimitForUnpaginatedFullHistory(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -64,8 +64,10 @@ func TestNewServerDefaultsFrameLimitForEncryptedPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if server.config.MaxFrameBytes != 2<<20 {
-		t.Fatalf("default MaxFrameBytes = %d, want %d", server.config.MaxFrameBytes, 2<<20)
+	// 32MB accommodates a full (unpaginated) session history response after
+	// encryption + base64 expansion (~25% overhead). See server.go MaxFrameBytes.
+	if server.config.MaxFrameBytes != 32<<20 {
+		t.Fatalf("default MaxFrameBytes = %d, want %d", server.config.MaxFrameBytes, 32<<20)
 	}
 }
 

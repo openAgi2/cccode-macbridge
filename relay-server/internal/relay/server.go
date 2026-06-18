@@ -19,12 +19,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// relay 连接读写 deadline（与 go-bridge 对齐：10s 写 / 90s 读）。
-// 用 var 而非 const：测试需要覆盖成短值（如 200ms）避免等真实 10s/90s。
-// 详见 docs/2026-06-17-bridge-hang-implementation-spec.md relay-server 落点。
+// relay 连接读写 deadline。写 deadline 从 10s 提到 120s：去分页后单次全量响应可达数 MB
+//（32MB 帧上限，加密+base64 后膨胀约 25%），WiFi(~10Mbps)传 32MB 需 ~26s，中等蜂窝需 ~120s，
+// 10s/60s 会误杀正常大帧传输。半开检测已由 go-bridge 独立应用层心跳(10s) + 本侧读 deadline(90s)
+// 覆盖，写 deadline 不再兼任主要半开检测职能。用 var 而非 const：测试覆盖成短值。
 var (
-	relayWriteDeadline = 10 * time.Second // socketPeer.write 转发写 deadline
-	relayReadDeadline  = 90 * time.Second // readBridgeFrames/readDeviceFrames 读 deadline
+	relayWriteDeadline = 120 * time.Second // socketPeer.write 转发写 deadline（容纳大帧慢链路传输）
+	relayReadDeadline  = 90 * time.Second  // readBridgeFrames/readDeviceFrames 读 deadline
 )
 
 type Config struct {
@@ -88,7 +89,10 @@ func NewServer(store *Store, config Config, logger *slog.Logger) (*Server, error
 		config.MaxMailboxBytes = 50 << 20
 	}
 	if config.MaxFrameBytes <= 0 {
-		config.MaxFrameBytes = 2 << 20
+		// 32MB: 去分页后单次全量 get_session_messages 响应可达数 MB（加密+base64 后膨胀约 25%）。
+		// 2MB 会让长 session 全量响应撑爆帧上限 → close 1009 断连循环。32MB 容纳 ~25MB 业务
+		// payload，覆盖所有实测 session 并为更大的 session 留余量。
+		config.MaxFrameBytes = 32 << 20
 	}
 	if config.RateLimitPerMinute <= 0 {
 		config.RateLimitPerMinute = 120
