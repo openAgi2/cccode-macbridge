@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ func main() {
 	maxFrame := flag.Int64("max-frame-bytes", int64Or("RELAY_MAX_FRAME_BYTES", 32<<20), "maximum WebSocket envelope bytes")
 	rateLimit := flag.Int("rate-limit-per-minute", intOr("RELAY_RATE_LIMIT_PER_MINUTE", 120), "route registrations allowed per IP per minute")
 	activationRateLimit := flag.Int("activation-rate-limit-per-minute", intOr("RELAY_ACTIVATION_RATE_LIMIT_PER_MINUTE", 6), "self-service activation requests allowed per IP per minute")
+	trustedProxyCIDRs := flag.String("trusted-proxy-cidrs", envOr("RELAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128"), "comma-separated proxy CIDRs allowed to supply CF-Connecting-IP")
 	flag.Parse()
 
 	digest, err := relay.ProvisionTokenDigestFromHex(*tokenHash)
@@ -50,6 +52,7 @@ func main() {
 		MaxFrameBytes:                *maxFrame,
 		RateLimitPerMinute:           *rateLimit,
 		ActivationRateLimitPerMinute: *activationRateLimit,
+		TrustedProxyCIDRs:            splitNonEmpty(*trustedProxyCIDRs),
 	}, slog.Default())
 	if err != nil {
 		slog.Error("configure relay server", "error", err)
@@ -77,6 +80,16 @@ func main() {
 		slog.Error("relay terminated", "error", err)
 		os.Exit(1)
 	}
+}
+
+func splitNonEmpty(value string) []string {
+	var result []string
+	for _, part := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func cleanupMailbox(ctx context.Context, store *relay.Store) {

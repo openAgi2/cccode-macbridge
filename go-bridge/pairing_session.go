@@ -196,6 +196,7 @@ type PairingSessionStore interface {
 	Get(id string) (*PairingSession, error)
 	GetByManualCode(code string) (*PairingSession, error)
 	Update(session *PairingSession) error
+	Delete(id string) error
 	DeleteExpired() error
 	CleanupAll()
 }
@@ -258,6 +259,19 @@ func (s *MemoryPairingStore) Update(session *PairingSession) error {
 	}
 	s.byID[session.ID] = session
 	s.byManualCode[session.ManualCode] = session
+	return nil
+}
+
+// Delete 删除指定 ID 的会话（P1-7：失败次数耗尽时强制失效该 session）。
+func (s *MemoryPairingStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.byID[id]
+	if !ok {
+		return nil
+	}
+	delete(s.byManualCode, session.ManualCode)
+	delete(s.byID, id)
 	return nil
 }
 

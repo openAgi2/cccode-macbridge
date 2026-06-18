@@ -30,6 +30,16 @@ type WireError struct {
 	Message string `json:"message,omitempty"`
 }
 
+func (e *WireError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
+
 // RegisterAck is the response to a register message.
 type RegisterAck struct {
 	Ok          bool            `json:"ok"`

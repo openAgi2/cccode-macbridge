@@ -114,6 +114,7 @@ func handlePairingWebSocket(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("pairing websocket upgrade failed", "remoteAddr", r.RemoteAddr, "scheme", r.URL.Scheme, "host", r.Host, "error", err)
 		return
 	}
+	conn.SetReadLimit(maxInboundFrameBytes)
 	slog.Info("pairing websocket connected", "remoteAddr", r.RemoteAddr, "host", r.Host)
 
 	var acceptedPairingID string
@@ -168,24 +169,50 @@ func handlePairingWebSocket(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 
-	// 支持 pairingId 或 manualCode 查找
-	var session *PairingSession
-	if acceptedPairingID != "" {
-		session, err = globalPairingStore.Get(acceptedPairingID)
-	} else if acceptedManualCode != "" {
-		session, err = globalPairingStore.GetByManualCode(acceptedManualCode)
-	} else {
-		sendPairingResult(conn, false, "pairingId 或 manualCode 必须提供其一")
+	// P1-7 最小止损：取消 manualCode 单独查找。claim 必须同时提交高熵 pairingId
+	// 与 manualCode；manualCode 退化为二次确认因子，不再是 20 bit lookup secret。
+	// 缺任一即返回 pairing.invalid_code（不区分存在性）。
+	if acceptedPairingID == "" || acceptedManualCode == "" {
+		slog.Warn("pairing claim missing pairingId or manualCode", "remoteAddr", r.RemoteAddr, "hasPairingId", acceptedPairingID != "", "hasManualCode", acceptedManualCode != "")
+		sendPairingResultCode(conn, false, "pairing.invalid_code", "需要 pairingId 与 manualCode")
 		return
 	}
+
+	// claim 前资源治理：来源 IP 限流 + 全局并发上限（P1-7）。
+	var session *PairingSession
+	if perr := globalPairingGate.acquire(r); perr != nil {
+		sendPairingResultCode(conn, false, perr.Code, perr.Message)
+		return
+	}
+	defer globalPairingGate.release()
+
+	// 仅按高熵 pairingId 查找；manualCode 作为二次校验因子。
+	session, err = globalPairingStore.Get(acceptedPairingID)
 	if err != nil {
-		slog.Warn("pairing session lookup failed", "remoteAddr", r.RemoteAddr, "pairingId", acceptedPairingID, "hasManualCode", acceptedManualCode != "", "error", err)
-		sendPairingResult(conn, false, "pairing session lookup failed")
+		slog.Warn("pairing session lookup failed", "remoteAddr", r.RemoteAddr, "pairingId", acceptedPairingID, "error", err)
+		sendPairingResultCode(conn, false, "pairing.invalid_code", "配对会话查找失败")
 		return
 	}
 	if session == nil {
-		slog.Warn("pairing session not found", "remoteAddr", r.RemoteAddr, "pairingId", acceptedPairingID, "hasManualCode", acceptedManualCode != "")
-		sendPairingResult(conn, false, "pairing session not found")
+		// 不存在也消耗失败计数，避免枚举探测存在性差异（P1-7 存在性 oracle）。
+		if exhausted := globalPairingGate.recordPairingFailure(acceptedPairingID, time.Now()); exhausted {
+			slog.Warn("pairing attempt exhausted for unknown pairingId", "remoteAddr", r.RemoteAddr, "pairingId", acceptedPairingID)
+		}
+		sendPairingResultCode(conn, false, "pairing.invalid_code", "配对码无效或已过期")
+		return
+	}
+
+	// 二次因子校验：manualCode 必须匹配该 session。失败统一返回 invalid_code，
+	// 不泄漏“session 存在但码错”与“session 不存在”的差异。
+	if !hmacEqualString(session.ManualCode, acceptedManualCode) {
+		if exhausted := globalPairingGate.recordPairingFailure(session.ID, time.Now()); exhausted {
+			slog.Warn("pairing manual code exhausted", "remoteAddr", r.RemoteAddr, "pairingId", session.ID)
+			// 达到失败上限：让该 session 失效，强制 Mac 重新生成。
+			_ = globalPairingStore.Delete(session.ID)
+			sendPairingResultCode(conn, false, "pairing.invalid_code", "配对尝试次数过多，请重新生成配对码")
+			return
+		}
+		sendPairingResultCode(conn, false, "pairing.invalid_code", "配对码无效或已过期")
 		return
 	}
 
@@ -196,6 +223,7 @@ func handlePairingWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	globalPairingGate.resetPairingFailures(session.ID)
 	slog.Info("pairing websocket claimed", "remoteAddr", r.RemoteAddr, "pairingId", session.ID, "deviceId", acceptedDevice.DeviceID)
 	// 先注册 pending connection，再暴露 pairing_result 给客户端和 Mac 端轮询。
 	// 否则 Mac 端可能在 state=claimed 后立即 approve，导致 pairing_complete
@@ -267,6 +295,22 @@ func sendPairingResult(conn *websocket.Conn, ok bool, errMsg string) {
 	msg, _ := json.Marshal(result)
 	// SetWriteDeadline 自身并发安全，紧贴 WriteMessage 即可（sendPairingResult 部分调用点不持锁，
 	// 但都在读 goroutine启动前调用，无写并发；详见根治 spec 评审 §一.1）。
+	_ = conn.SetWriteDeadline(time.Now().Add(bridgeWriteTimeout))
+	conn.WriteMessage(websocket.TextMessage, msg)
+}
+// sendPairingResultCode 发送携带明确错误码的 pairing_result（P1-7 错误码契约）。
+func sendPairingResultCode(conn *websocket.Conn, ok bool, code, message string) {
+	result := map[string]interface{}{
+		"type": "pairing_result",
+		"ok":   ok,
+	}
+	if !ok && code != "" {
+		result["error"] = map[string]string{
+			"code":    code,
+			"message": message,
+		}
+	}
+	msg, _ := json.Marshal(result)
 	_ = conn.SetWriteDeadline(time.Now().Add(bridgeWriteTimeout))
 	conn.WriteMessage(websocket.TextMessage, msg)
 }

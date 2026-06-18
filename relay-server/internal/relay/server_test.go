@@ -237,9 +237,15 @@ func activateRoute(t *testing.T, base, installID, bridgeAuth string, publicKey e
 	return requestJSON(t, http.MethodPost, base+"/v1/activations/routes", "", signedActivationBody(installID, bridgeAuth, publicKey, privateKey))
 }
 
+// signedActivationBody 构造一个合法签名的激活请求体。每次调用生成唯一 nonce，
+// 反映合法客户端行为（合法恢复/重新激活会使用新 nonce），并配合 P2-4 重放保护。
 func signedActivationBody(installID, bridgeAuth string, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey) map[string]any {
 	timestamp := time.Now().Unix()
-	nonce := "nonce_request_123"
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		panic(err)
+	}
+	nonce := "nonce_" + base64.RawURLEncoding.EncodeToString(nonceBytes)
 	encodedPublicKey := base64.StdEncoding.EncodeToString(publicKey)
 	signature := ed25519.Sign(privateKey, activationPayload(installID, encodedPublicKey, bridgeAuth, timestamp, nonce))
 	return map[string]any{

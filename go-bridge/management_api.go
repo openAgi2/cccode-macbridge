@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/openAgi2/cccode-macbridge/core"
 )
+
+// httpReadHeaderTimeout 是管理/主 HTTP server 的握手 header 读取超时（P2-1 slowloris 防护）。
+// 用 var 而非 const：测试可覆盖为短值避免 10s 等待。
+var httpReadHeaderTimeout = 10 * time.Second
 
 // ── 管理 API 配置 ───────────────────────────────────────────────────────────
 // ManagementConfig 包含创建 ManagementServer 所需的全部依赖。
@@ -49,6 +54,9 @@ type ManagementServer struct {
 	shutdownCb                  func()
 	shutdownOnce                sync.Once
 	mgmtMux                     *http.ServeMux
+	serverMu                    sync.Mutex
+	httpServer                  *http.Server
+	listener                    net.Listener
 	dnMu                        sync.RWMutex // 保护 cfg.DisplayName 的并发读写
 	agentMu                     sync.RWMutex
 	agentDescriptors            []AgentProviderDescriptor
@@ -119,7 +127,18 @@ func (s *ManagementServer) Start(host string, port int) (actualPort int, err err
 
 	actualPort = listener.Addr().(*net.TCPAddr).Port
 
-	httpServer := &http.Server{Handler: s.mgmtMux}
+	// P2-1: 管理 API（loopback）也设握手超时与 header 上限，防止 slow header 耗尽连接。
+	httpServer := &http.Server{
+		Handler:           s.mgmtMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+
+	s.serverMu.Lock()
+	s.httpServer = httpServer
+	s.listener = listener
+	s.serverMu.Unlock()
 
 	go func() {
 		slog.Info("go-bridge: 管理 API 启动", "addr", fmt.Sprintf("%s:%d", host, actualPort))
@@ -129,6 +148,19 @@ func (s *ManagementServer) Start(host string, port int) (actualPort int, err err
 	}()
 
 	return actualPort, nil
+}
+
+// Shutdown 优雅关闭管理 API（P2-1：也便于测试清理，避免 goroutine 泄漏）。
+func (s *ManagementServer) Shutdown() {
+	s.serverMu.Lock()
+	srv := s.httpServer
+	s.serverMu.Unlock()
+	if srv == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
 }
 
 // ServeHTTP 路由 /internal/* 请求到对应处理函数。
@@ -851,7 +883,8 @@ func saveDisplayNameToDir(dataDir *DataDir, name string) {
 		return
 	}
 	path := filepath.Join(dataDir.Path(), "display-name.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	// 原子写 + 0600（P2-5）。
+	if err := core.AtomicWriteFile(path, data, 0o600); err != nil {
 		slog.Error("go-bridge: display name 写入失败", "error", err)
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/openAgi2/cccode-macbridge/core"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -23,6 +23,17 @@ type TrustedDeviceRecord struct {
 	LastSeenAt             time.Time  `json:"lastSeenAt"`
 	LastRemoteAddress      string     `json:"lastRemoteAddress,omitempty"`
 	RevokedAt              *time.Time `json:"revokedAt,omitempty"`
+}
+
+// Clone 返回记录的深拷贝。*time.Time 指针字段必须单独复制，否则新旧快照
+// 共享同一指针，后续对原 store 的 RevokeDevice 会污染副本（P1-3 深拷贝陷阱）。
+func (r TrustedDeviceRecord) Clone() TrustedDeviceRecord {
+	out := r
+	if r.RevokedAt != nil {
+		t := *r.RevokedAt
+		out.RevokedAt = &t
+	}
+	return out
 }
 
 // TrustedDeviceStore 定义设备存储的抽象接口。
@@ -74,6 +85,40 @@ func NewMemoryDeviceStore() *MemoryDeviceStore {
 		byID:    make(map[string]TrustedDeviceRecord),
 		byToken: make(map[string]string),
 	}
+}
+
+// cloneSnapshot 返回当前状态的深拷贝（独立 map + 每条记录 Clone）。
+// 调用方必须已持有读锁。用于 FileDeviceStore 的事务性提交：先在副本上变更，
+// 原子写盘成功后再一次性替换 mem 指针（P1-3）。
+func (s *MemoryDeviceStore) cloneSnapshot() *MemoryDeviceStore {
+	out := &MemoryDeviceStore{
+		byID:    make(map[string]TrustedDeviceRecord, len(s.byID)),
+		byToken: make(map[string]string, len(s.byToken)),
+	}
+	for id, rec := range s.byID {
+		cloned := rec.Clone()
+		out.byID[id] = cloned
+		out.byToken[rec.TokenHash] = id
+	}
+	return out
+}
+
+// Clone 返回当前 store 的深拷贝快照，供外部（如 FileDeviceStore 提交流程）使用。
+func (s *MemoryDeviceStore) Clone() *MemoryDeviceStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cloneSnapshot()
+}
+
+// snapshotRecords 返回所有记录的独立副本切片。
+func (s *MemoryDeviceStore) snapshotRecords() []TrustedDeviceRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]TrustedDeviceRecord, 0, len(s.byID))
+	for _, rec := range s.byID {
+		out = append(out, rec.Clone())
+	}
+	return out
 }
 
 // AddDevice 添加一条设备记录。如果 deviceID 已存在则返回错误。
@@ -173,8 +218,10 @@ func (s *MemoryDeviceStore) allDevices() []TrustedDeviceRecord {
 // FileDeviceStore 将受信设备持久化到 data-dir/devices.json。
 // Product 模式下必须跨 runtime 重启保留 device token，否则 iOS 每次重启后都会 auth.invalid_token。
 type FileDeviceStore struct {
-	path string
-	mem  *MemoryDeviceStore
+	path     string
+	commitMu sync.Mutex // 串行化整个 read-modify-write 提交序列（P1-3 并发 lost-update 修复）
+	memMu    sync.RWMutex
+	mem      *MemoryDeviceStore
 }
 
 func NewFileDeviceStore(path string) (*FileDeviceStore, error) {
@@ -188,48 +235,95 @@ func NewFileDeviceStore(path string) (*FileDeviceStore, error) {
 	return store, nil
 }
 
-func (s *FileDeviceStore) AddDevice(record TrustedDeviceRecord) error {
-	if err := s.mem.AddDevice(record); err != nil {
-		return err
-	}
-	return s.save()
+// snapshotMem 返回当前内存快照（在 memMu 读锁下读取 mem 指针）。
+func (s *FileDeviceStore) snapshotMem() *MemoryDeviceStore {
+	s.memMu.RLock()
+	defer s.memMu.RUnlock()
+	return s.mem
 }
 
-func (s *FileDeviceStore) ReplaceDevice(record TrustedDeviceRecord) ([]string, error) {
-	replaced, err := s.mem.ReplaceDevice(record)
-	if err != nil {
-		return nil, err
+// commit 在一个事务里完成“深拷贝 → 修改副本 → 原子写盘 → swap 内存指针”。
+// 写盘失败时丢弃副本，内存快照保持旧状态（P1-3）。
+//
+// 并发正确性（P1-3 review 修复）：commitMu 串行化整个 read-modify-write 序列。
+// memMu 只保证单次 mem 指针 swap 的原子性，不保证“读取快照→克隆→改副本→写盘→swap”
+// 这一整段序列的隔离性。两个并发 commit 若都基于同一快照克隆，后 swap 者会覆盖先写者，
+// 导致先提交的设备记录丢失（经典原子性≠隔离性）。因此整个序列必须在 commitMu 下进行：
+// 只读查找走 memMu RLock（不阻塞读），但任意时刻只有一个 commit 在推进。
+// fn 在已锁定的独立副本上运行变更逻辑；fn 返回非 nil 错误时不会写盘也不会 swap。
+func (s *FileDeviceStore) commit(fn func(clone *MemoryDeviceStore) error) error {
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+
+	current := s.snapshotMem()
+	current.mu.RLock()
+	clone := current.cloneSnapshot()
+	current.mu.RUnlock()
+
+	if err := fn(clone); err != nil {
+		return err
 	}
-	if err := s.save(); err != nil {
+
+	data, err := json.MarshalIndent(clone.snapshotRecords(), "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化 devices.json 失败: %w", err)
+	}
+	data = append(data, '\n')
+	if err := core.AtomicWriteFile(s.path, data, 0o600); err != nil {
+		return fmt.Errorf("原子写入 devices.json 失败: %w", err)
+	}
+
+	s.memMu.Lock()
+	s.mem = clone
+	s.memMu.Unlock()
+	return nil
+}
+
+// AddDevice 添加设备并事务性提交。写盘失败时内存保持旧状态，不会出现“已接受但未持久化”。
+func (s *FileDeviceStore) AddDevice(record TrustedDeviceRecord) error {
+	return s.commit(func(clone *MemoryDeviceStore) error {
+		return clone.AddDevice(record)
+	})
+}
+
+// ReplaceDevice 保存最新配对凭据并事务性提交。
+func (s *FileDeviceStore) ReplaceDevice(record TrustedDeviceRecord) ([]string, error) {
+	var replaced []string
+	err := s.commit(func(clone *MemoryDeviceStore) error {
+		var innerErr error
+		replaced, innerErr = clone.ReplaceDevice(record)
+		return innerErr
+	})
+	if err != nil {
 		return nil, err
 	}
 	return replaced, nil
 }
 
 func (s *FileDeviceStore) LookupByDeviceID(deviceID string) (*TrustedDeviceRecord, error) {
-	return s.mem.LookupByDeviceID(deviceID)
+	return s.snapshotMem().LookupByDeviceID(deviceID)
 }
 
 func (s *FileDeviceStore) LookupByTokenHash(hash string) (*TrustedDeviceRecord, error) {
-	return s.mem.LookupByTokenHash(hash)
+	return s.snapshotMem().LookupByTokenHash(hash)
 }
 
+// EnableRelay 绑定 relay identity 并事务性提交。
 func (s *FileDeviceStore) EnableRelay(deviceID, identityPublicKey string, generation uint64) error {
-	if err := s.mem.EnableRelay(deviceID, identityPublicKey, generation); err != nil {
-		return err
-	}
-	return s.save()
+	return s.commit(func(clone *MemoryDeviceStore) error {
+		return clone.EnableRelay(deviceID, identityPublicKey, generation)
+	})
 }
 
+// RevokeDevice 吊销设备并事务性提交。写盘失败时内存仍可见为未吊销。
 func (s *FileDeviceStore) RevokeDevice(deviceID string) error {
-	if err := s.mem.RevokeDevice(deviceID); err != nil {
-		return err
-	}
-	return s.save()
+	return s.commit(func(clone *MemoryDeviceStore) error {
+		return clone.RevokeDevice(deviceID)
+	})
 }
 
 func (s *FileDeviceStore) ListDevices() ([]TrustedDeviceRecord, error) {
-	return s.mem.ListDevices()
+	return s.snapshotMem().ListDevices()
 }
 
 func (s *FileDeviceStore) load() error {
@@ -252,18 +346,6 @@ func (s *FileDeviceStore) load() error {
 		s.mem.byToken[rec.TokenHash] = rec.DeviceID
 	}
 	return nil
-}
-
-func (s *FileDeviceStore) save() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("创建 devices.json 目录失败: %w", err)
-	}
-	data, err := json.MarshalIndent(s.mem.allDevices(), "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化 devices.json 失败: %w", err)
-	}
-	data = append(data, '\n')
-	return os.WriteFile(s.path, data, 0o600)
 }
 
 // AuthError 表示设备认证失败的结构化错误。

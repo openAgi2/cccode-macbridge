@@ -415,17 +415,46 @@ type PairingClaim struct {
 	State        string `json:"state"`
 }
 
+// ErrPairingClaimConflict 表示 (route_id, claim_id) 已存在且与本次提交不同（P2-9）。
+// 相同请求（capability_hash + sealed_claim 一致）视为幂等成功，返回 nil。
+var ErrPairingClaimConflict = fmt.Errorf("pairing claim conflict")
+
 func (s *Store) SubmitPairingClaim(ctx context.Context, routeID, claimID string, capabilityHash []byte, sealedClaim []byte, now time.Time, ttl time.Duration) error {
-	_, err := s.db.ExecContext(ctx, `
-	INSERT INTO pending_pairing_claims(route_id, claim_id, capability_hash, sealed_claim, state, expires_at)
-	SELECT route_id, ?, ?, ?, 'pending', ?
-	FROM routes WHERE route_id = ? AND revoked_at IS NULL`,
-		claimID, capabilityHash, sealedClaim, now.Add(ttl).Unix(), routeID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin pairing claim: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 清理同 route 的过期 claim（与 PendingClaims 一致）。
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM pending_pairing_claims WHERE route_id = ? AND expires_at <= ?`, routeID, now.Unix()); err != nil {
+		return fmt.Errorf("expire pairing claims: %w", err)
+	}
+
+	var existingCap, existingSealed []byte
+	err = tx.QueryRowContext(ctx,
+		`SELECT capability_hash, sealed_claim FROM pending_pairing_claims WHERE route_id = ? AND claim_id = ?`,
+		routeID, claimID).Scan(&existingCap, &existingSealed)
+	if err == nil {
+		// 已存在同 (route, claim)：相同请求幂等成功，不同请求返回冲突（P2-9）。
+		if hmac.Equal(existingCap, capabilityHash) && hmac.Equal(existingSealed, sealedClaim) {
+			return tx.Commit()
+		}
+		return ErrPairingClaimConflict
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("read existing pairing claim: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO pending_pairing_claims(route_id, claim_id, capability_hash, sealed_claim, state, expires_at) SELECT route_id, ?, ?, ?, 'pending', ? FROM routes WHERE route_id = ? AND revoked_at IS NULL`,
+		claimID, capabilityHash, sealedClaim, now.Add(ttl).Unix(), routeID); err != nil {
 		return fmt.Errorf("insert pairing claim: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
+
 
 func (s *Store) VerifyPairingCapability(ctx context.Context, routeID, claimID string, capability string) bool {
 	var hash []byte

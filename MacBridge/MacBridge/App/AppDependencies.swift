@@ -70,6 +70,7 @@ class AppDependencies: ObservableObject {
             ? UserDefaults.standard.string(forKey: "relayRouteID") ?? ""
             : ""
 
+        let logFilePath = logDir + "/go-bridge.log"
         let config = RuntimeConfig(
             executablePath: executablePath,
             dataDir: dir,
@@ -79,6 +80,7 @@ class AppDependencies: ObservableObject {
             codexAppServerURL: "ws://127.0.0.1:4141",
             opencodeUser: opencodeUser,
             opencodePass: opencodePass,
+            logFilePath: logFilePath,
             remoteURL: UserDefaults.standard.string(forKey: "remoteBridgeURL") ?? "",
             includeTailscaleInPairing: UserDefaults.standard.object(forKey: "pairingIncludeTailscale") as? Bool ?? true,
             includeRemoteInPairing: UserDefaults.standard.object(forKey: "pairingIncludeRemote") as? Bool ?? true,

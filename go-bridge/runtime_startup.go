@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"github.com/openAgi2/cccode-macbridge/core"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -32,9 +33,11 @@ type RuntimeErrorFrame struct {
 // ── 错误码常量 ───────────────────────────────────────────────────────────────
 
 const (
-	RuntimeErrorPortBindFailed = "runtime_error.port_bind_failed"
-	RuntimeErrorNoAgents       = "runtime_error.no_agents"
-	RuntimeErrorConfigInvalid  = "runtime_error.config_invalid"
+	RuntimeErrorPortBindFailed         = "runtime_error.port_bind_failed"
+	RuntimeErrorNoAgents               = "runtime_error.no_agents"
+	RuntimeErrorConfigInvalid          = "runtime_error.config_invalid"
+	RuntimeErrorManagementBindFailed   = "runtime.management_bind_failed" // P1-6: 管理 API 监听失败
+	RuntimeErrorManagementURLMissing   = "runtime.management_url_missing" // P1-6: ready frame 缺少必需 management URL
 )
 
 // WriteReadyFrame 将就绪帧以 JSON 形式写入 stdout 并追加换行。
@@ -54,7 +57,8 @@ func WriteReadyFrame(port int, drivers []string, managementURL string, dataDirPa
 	// 写入 data-dir/runtime.json 供 MacBridge 发现外部启动的 go-bridge
 	if dataDirPath != "" {
 		runtimePath := dataDirPath + "/runtime.json"
-		if err := os.WriteFile(runtimePath, data, 0644); err != nil {
+		// 原子写 runtime.json（P2-5）：Mac App 据此发现 port/pid/managementUrl，截断会导致误判。
+		if err := core.AtomicWriteFile(runtimePath, data, 0o600); err != nil {
 			slog.Error("go-bridge: runtime.json 写入失败", "path", runtimePath, "error", err)
 		}
 	}

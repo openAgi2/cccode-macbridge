@@ -123,6 +123,12 @@ func pairingErrorMessage(payload map[string]any) string {
 	return message
 }
 
+func pairingErrorCode(payload map[string]any) string {
+	errorPayload, _ := payload["error"].(map[string]any)
+	code, _ := errorPayload["code"].(string)
+	return code
+}
+
 func TestHandlePairingWebSocketIgnoresLegacyPingProbe(t *testing.T) {
 	store, restoreGlobals := setupPairingHandlerTest(t)
 	defer restoreGlobals()
@@ -138,7 +144,8 @@ func TestHandlePairingWebSocketIgnoresLegacyPingProbe(t *testing.T) {
 	if err := clientConn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
 		t.Fatalf("write ping failed: %v", err)
 	}
-	sendPairingClaim(t, clientConn, session.ID, "")
+	// P1-7: claim 必须同时提交 pairingId 与 manualCode。
+	sendPairingClaim(t, clientConn, session.ID, session.ManualCode)
 
 	result := readPairingMessage(t, clientConn)
 	if got := result["type"]; got != "pairing_result" {
@@ -157,7 +164,9 @@ func TestHandlePairingWebSocketIgnoresLegacyPingProbe(t *testing.T) {
 	finishPendingPairing(t, session.ID, clientConn)
 }
 
-func TestHandlePairingWebSocketSupportsManualCodeLookup(t *testing.T) {
+// TestHandlePairingWebSocketRejectsManualCodeOnlyClaim 验证 P1-7：manualCode 不能
+// 单独作为 lookup secret。只提交 manualCode（无 pairingId）应被拒绝。
+func TestHandlePairingWebSocketRejectsManualCodeOnlyClaim(t *testing.T) {
 	store, restoreGlobals := setupPairingHandlerTest(t)
 	defer restoreGlobals()
 
@@ -169,20 +178,20 @@ func TestHandlePairingWebSocketSupportsManualCodeLookup(t *testing.T) {
 	clientConn, cleanupConn := openPairingHandlerConn(t)
 	defer cleanupConn()
 
+	// 仅提交 manualCode，不提交 pairingId → 必须被拒绝。
 	sendPairingClaim(t, clientConn, "", session.ManualCode)
 
 	result := readPairingMessage(t, clientConn)
-	if ok, _ := result["ok"].(bool); !ok {
-		t.Fatalf("pairing result ok = %#v, want true", result["ok"])
+	if ok, _ := result["ok"].(bool); ok {
+		t.Fatalf("manualCode-only claim 应被拒绝，ok = %#v", result["ok"])
 	}
-	if session.State != PairingClaimed {
-		t.Fatalf("session state = %s, want %s", session.State, PairingClaimed)
+	errCode := pairingErrorCode(result)
+	if errCode != "pairing.invalid_code" {
+		t.Fatalf("error code = %q, want pairing.invalid_code", errCode)
 	}
-	if session.ClaimingDeviceName != "Jack iPhone" {
-		t.Fatalf("claiming device name = %q, want Jack iPhone", session.ClaimingDeviceName)
+	if session.State != PairingCreated {
+		t.Fatalf("被拒绝的 claim 不应改变 session 状态: %s", session.State)
 	}
-
-	finishPendingPairing(t, session.ID, clientConn)
 }
 
 func TestHandlePairingWebSocketReturnsErrorForInvalidJSONAfterProbe(t *testing.T) {
@@ -215,13 +224,14 @@ func TestHandlePairingWebSocketReturnsErrorWhenSessionMissing(t *testing.T) {
 	clientConn, cleanupConn := openPairingHandlerConn(t)
 	defer cleanupConn()
 
-	sendPairingClaim(t, clientConn, "pair_missing", "")
+	// P1-7: claim 需要 pairingId + manualCode；不存在的 pairingId 统一返回 invalid_code（不泄漏存在性）。
+	sendPairingClaim(t, clientConn, "pair_missing", "123456")
 
 	result := readPairingMessage(t, clientConn)
 	if ok, _ := result["ok"].(bool); ok {
 		t.Fatalf("pairing result ok = %#v, want false", result["ok"])
 	}
-	if message := pairingErrorMessage(result); message != "pairing session not found" {
-		t.Fatalf("error message = %q, want pairing session not found", message)
+	if errCode := pairingErrorCode(result); errCode != "pairing.invalid_code" {
+		t.Fatalf("error code = %q, want pairing.invalid_code", errCode)
 	}
 }

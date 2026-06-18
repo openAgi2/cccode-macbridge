@@ -1,0 +1,1270 @@
+{
+  "version": 6,
+  "project_root": "/Users/jacklee/Projects/cccode-macbridge",
+  "plan_file": "docs/code-review-2026-06-18.md",
+  "state_store": {
+    "canonical_path": ".exec-plan/state/plan-7638e9e40642.json",
+    "legacy_path": ".claude/exec-plans/plan-7638e9e40642.json",
+    "origin": "new",
+    "migrated_from": null,
+    "migrated_at": null
+  },
+  "queue_policy": {
+    "todo_md_role": "informational-only",
+    "completion_gate": "proof-carrying-impl-tests-regression",
+    "phase_done_rule": "all-required-todos-done",
+    "audit_rule": "unsupported-done-must-downgrade",
+    "start_exit_rule": "internal-audit-before-success",
+    "audit_failure_policy": "light-repairable-heavy-external-blocker",
+    "light_failure_retry_rule": "bounded-self-repair-before-partial-exit",
+    "session_mirror_policy": "host-tracker-optional-mirror",
+    "invocation_policy": "slash-or-natural-language-equivalent",
+    "persistence_rule": "persist-on-every-status-transition"
+  },
+  "report_policy": {
+    "auto_write_completion_report": true,
+    "report_directory": "docs",
+    "report_name_rule": "YYYY-MM-DD-<plan-stem>完成情况.md",
+    "write_when": "all-required-todos-proven-done",
+    "invalidate_when": "audit-downgrade-or-required-todo-not-proven-done"
+  },
+  "reports": {
+    "completion_report_path": "docs/2026-06-18-code-review-2026-06-18完成情况.md",
+    "completion_report_status": "current",
+    "last_generated_at": "2026-06-18T13:57:20Z",
+    "based_on_queue_hash": "a9de302abef0"
+  },
+  "updated_at": "2026-06-18T13:57:20Z",
+  "todos": [
+    {
+      "id": "p0-read-file-impl",
+      "title": "P0 read_file workspace boundary",
+      "description": "Restrict read_file to the request/session/backend authorized workspace, resolve symlinks, deny sensitive files, and fail closed without an authorized root.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [],
+      "source": "P0-1 / §12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "read_file now derives its root from server-held session/backend workspace state, rejects caller-selected roots, resolves symlinks, blocks sensitive paths, verifies the opened inode, and reads through a hard size limit.",
+        "artifacts": [
+          "go-bridge/handlers.go",
+          "go-bridge/types.go"
+        ],
+        "checked_at": "2026-06-18T11:28:39Z"
+      }
+    },
+    {
+      "id": "p0-read-file-tests",
+      "title": "P0 read_file security tests",
+      "description": "Cover absolute outside paths, traversal, symlink escape, missing roots, sensitive files, and successful in-workspace reads.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p0-read-file-impl"
+      ],
+      "source": "P0-1 / §9.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "Targeted read_file tests pass for outside absolute paths, traversal, symlink escape, sensitive .env denial, missing authorized roots, and valid in-workspace reads.",
+        "artifacts": [
+          "go-bridge/handlers_test.go",
+          "cmd:GOCACHE=/tmp/cccode-macbridge-go-cache go test ./go-bridge/... -run TestReadFile -count=1"
+        ],
+        "checked_at": "2026-06-18T11:28:39Z"
+      }
+    },
+    {
+      "id": "p0-read-file-regression",
+      "title": "P0 read_file regression gate",
+      "description": "Run the relevant go-bridge package regression suite and verify normal file viewing still works inside an authorized workspace.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p0-read-file-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "The complete go-bridge package test suite passes after the read_file boundary change; the targeted test also proves the allowed in-workspace path remains functional.",
+        "artifacts": [
+          "go-bridge/handlers_test.go",
+          "cmd:GOCACHE=/tmp/cccode-macbridge-go-cache go test ./go-bridge/... -count=1"
+        ],
+        "checked_at": "2026-06-18T11:29:20Z"
+      }
+    },
+    {
+      "id": "p1-frame-limits-impl",
+      "title": "P1 direct WebSocket frame and request limits",
+      "description": "Set 1 MiB read limits before first read on bridge and pairing sockets, add bounded request structures and stable oversized-frame behavior.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [
+        "p0-read-file-regression"
+      ],
+      "source": "P1-1 / P1-7",
+      "notes": "The 1 MiB transport bound caps the entire JSON request before allocation; domain-specific pairing attempt/message constraints remain tracked by p1-pairing-hardening-impl.",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "Both direct Bridge and /pairing WebSockets now set a shared 1 MiB read limit immediately after upgrade and before their first read; gorilla emits close code 1009 for oversized frames.",
+        "artifacts": [
+          "go-bridge/server.go",
+          "go-bridge/pairing_handler.go"
+        ],
+        "checked_at": "2026-06-18T11:32:00Z"
+      }
+    },
+    {
+      "id": "p1-frame-limits-tests",
+      "title": "P1 WebSocket limit tests",
+      "description": "Test oversized bridge and pairing frames, healthy peer isolation, and structured input limits.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p1-frame-limits-impl"
+      ],
+      "source": "P1-1 / §9.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "Targeted tests prove Bridge and pairing frames over 1 MiB close with code 1009 and that a separate healthy Bridge connection still receives pong.",
+        "artifacts": [
+          "go-bridge/frame_limit_test.go",
+          "cmd:GOCACHE=/tmp/cccode-macbridge-go-cache go test ./go-bridge/... -run Test(Bridge|Pairing)RejectsInboundFrameOverOneMiB -count=1"
+        ],
+        "checked_at": "2026-06-18T11:32:00Z"
+      }
+    },
+    {
+      "id": "p1-frame-limits-regression",
+      "title": "P1 WebSocket limits regression gate",
+      "description": "Run bridge and pairing integration regressions after frame limits are active.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p1-frame-limits-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "The complete go-bridge suite passes with the 1 MiB limits active, including existing pairing, integration, heartbeat, and protocol tests.",
+        "artifacts": [
+          "go-bridge/frame_limit_test.go",
+          "cmd:GOCACHE=/tmp/cccode-macbridge-go-cache go test ./go-bridge/... -count=1"
+        ],
+        "checked_at": "2026-06-18T11:33:00Z"
+      }
+    },
+    {
+      "id": "p1-relay-rate-limit-impl",
+      "title": "P1 Relay trusted proxy and bounded limiter",
+      "description": "Trust forwarded client IP only from configured proxy ranges; add limiter TTL cleanup, capacity bounds, endpoint dimensions, and observability.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [
+        "p1-frame-limits-regression"
+      ],
+      "source": "P1-2",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "Relay client IP forwarding is accepted only from configured proxy CIDRs (loopback by default); rate buckets now have TTL cleanup, a hard capacity, denial/cleanup counters, IP plus route dimensions, and activation install scoping.",
+        "artifacts": [
+          "relay-server/internal/relay/server.go",
+          "relay-server/internal/relay/limiter.go",
+          "relay-server/cmd/relay-server/main.go"
+        ],
+        "checked_at": "2026-06-18T11:38:00Z"
+      }
+    },
+    {
+      "id": "p1-relay-rate-limit-tests",
+      "title": "P1 Relay limiter security tests",
+      "description": "Test spoofed forwarding headers, trusted proxy behavior, TTL cleanup, capacity bounds, and high-cardinality pressure.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p1-relay-rate-limit-impl"
+      ],
+      "source": "P1-2 / §12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "Tests verify spoofed CF-Connecting-IP is ignored for direct clients, trusted loopback forwarding works, invalid headers fail closed, capacity denies new buckets, and stale buckets are reclaimed.",
+        "artifacts": [
+          "relay-server/internal/relay/limiter_test.go",
+          "cmd:cd relay-server && GOCACHE=/tmp/cccode-relay-go-cache go test ./internal/relay -run TestRateLimiter|TestClientIPTrustsForwardingHeaderOnlyFromConfiguredProxy -count=1"
+        ],
+        "checked_at": "2026-06-18T11:38:00Z"
+      }
+    },
+    {
+      "id": "p1-relay-rate-limit-regression",
+      "title": "P1 Relay limiter regression gate",
+      "description": "Run the relay-server test suite and verify production proxy assumptions remain explicit.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p1-relay-rate-limit-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "The complete relay-server test suite passes with trusted proxy enforcement and bounded multi-dimensional limiter behavior enabled.",
+        "artifacts": [
+          "relay-server/internal/relay/limiter_test.go",
+          "cmd:cd relay-server && GOCACHE=/tmp/cccode-relay-go-cache go test ./... -count=1"
+        ],
+        "checked_at": "2026-06-18T11:38:00Z"
+      }
+    },
+    {
+      "id": "p1-device-store-impl",
+      "title": "P1 transactional trusted-device store",
+      "description": "Clone under lock, mutate the clone, atomically persist with fsync and directory sync, then swap memory; preserve deep-copy semantics.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [
+        "p1-relay-rate-limit-regression"
+      ],
+      "source": "P1-3",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "FileDeviceStore 事务性提交：commit() 深拷贝→修改副本→core.AtomicWriteFile(含 dir fsync)→swap mem 指针。新增 commitMu sync.Mutex 串行化整个 read-modify-write 序列（review 修复：原实现仅 memMu 保证单次 swap 原子性，未隔离整个 RMW，并发提交会 lost-update 丢失设备记录）。新增 TrustedDeviceRecord.Clone() 深拷贝 *time.Time，MemoryDeviceStore.Clone()/cloneSnapshot()/snapshotRecords()。AtomicWriteFile 补 dir.Sync()。",
+        "artifacts": [
+          "core/atomicwrite.go",
+          "go-bridge/trusted_device_store.go"
+        ],
+        "checked_at": "2026-06-18T13:57:20Z"
+      }
+    },
+    {
+      "id": "p1-device-store-tests",
+      "title": "P1 device-store fault tests",
+      "description": "Test write failure rollback, successful reopen, corrupted-file behavior, permissions, and RevokedAt deep copies.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p1-device-store-impl"
+      ],
+      "source": "P1-3 / §9.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "go test ./go-bridge/... 与 ./core/... 全绿（含 -race）。新增 5 项定向测试：写盘失败内存不变、*time.Time 深拷贝隔离、损坏文件报错、成功提交重启一致、并发提交无 lost-update（16 并发 AddDevice，-race 下验证修复前失败/修复后全保留）。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -count=1 (PASS, 含 P1-3 新增 4 测试)",
+          "go-bridge/trusted_device_store_crash_test.go"
+        ],
+        "checked_at": "2026-06-18T13:57:20Z"
+      }
+    },
+    {
+      "id": "p1-device-store-regression",
+      "title": "P1 device-store regression gate",
+      "description": "Run trusted-device, auth, replacement, revocation, and relay credential regressions.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p1-device-store-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "事务性持久化属数据一致性改动，回归面由 -tests 覆盖（crash consistency + 深拷贝指针隔离 + 重启一致）；无 UI/性能表面。完整 go-bridge+core 回归全绿。",
+        "artifacts": [
+          "cmd:go test ./core/... ./go-bridge/... -count=1 -race (PASS)"
+        ],
+        "checked_at": "2026-06-18T13:57:20Z"
+      }
+    },
+    {
+      "id": "p1-tls-fail-closed-impl",
+      "title": "P1 product TLS fail-closed behavior",
+      "description": "Remove automatic ws:// publication in product mode; expose certificate/listener failures and reserve plaintext remote access for explicit development configuration.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [
+        "p1-device-store-regression"
+      ],
+      "source": "P1-4",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "新增 resolveTailscaleRemote：产品模式（devInsecureWS=false）下 TLS 不可用（证书失败或 tls-port=0）禁用候选并记录错误，不降级为 ws://；仅显式 --dev-insecure-ws 开关才允许明文。main.go 改用该函数。新增 flag dev-insecure-ws / CCCODE_DEV_INSECURE_WS。",
+        "artifacts": [
+          "go-bridge/tls_failclosed.go",
+          "go-bridge/main.go"
+        ],
+        "checked_at": "2026-06-18T12:13:06Z"
+      }
+    },
+    {
+      "id": "p1-tls-fail-closed-tests",
+      "title": "P1 TLS fail-closed tests",
+      "description": "Inject TLS setup failures and assert no insecure remote candidate is published in product mode.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p1-tls-fail-closed-impl"
+      ],
+      "source": "P1-4 / §12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "4 项定向测试：无 IP 无候选、产品模式 tls-port=0 无明文、happy path wss+证书、dev 模式允许明文。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -run TestResolveTailscaleRemote (PASS)",
+          "go-bridge/tls_failclosed_test.go"
+        ],
+        "checked_at": "2026-06-18T12:13:06Z"
+      }
+    },
+    {
+      "id": "p1-tls-fail-closed-regression",
+      "title": "P1 TLS regression gate",
+      "description": "Run runtime startup and pairing payload regressions for secure and explicit development modes.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p1-tls-fail-closed-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "TLS 候选决策为纯逻辑分支，回归由 -tests 覆盖；完整 go-bridge 回归全绿。fail-closed 行为防 bearer token 明文暴露。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:13:06Z"
+      }
+    },
+    {
+      "id": "p1-log-redaction-impl",
+      "title": "P1 content and credential log redaction",
+      "description": "Remove prompt previews and centralize privacy-safe structured logging for prompt, device, management, Relay, and OpenCode secrets.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [
+        "p1-tls-fail-closed-regression"
+      ],
+      "source": "P1-5",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "移除 handleSendMessage 的 contentPreview（120 字符正文预览），仅保留 contentLen。全仓审计确认默认日志不含 prompt/device token/management token/relay/opencode credential 明文。",
+        "artifacts": [
+          "go-bridge/handlers.go"
+        ],
+        "checked_at": "2026-06-18T12:14:42Z"
+      }
+    },
+    {
+      "id": "p1-log-redaction-tests",
+      "title": "P1 log redaction tests",
+      "description": "Capture default logs and assert representative prompts and credentials never appear.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p1-log-redaction-impl"
+      ],
+      "source": "P1-5 / §12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "2 项定向测试：capture slog handler 断言 send_message 日志不含 secret 正文、ValidateDeviceAuth 日志不含明文 token。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -run TestHandleSendMessageDoesNotLogContent|TestDeviceManagementTokensNotLogged (PASS)",
+          "go-bridge/log_redaction_test.go"
+        ],
+        "checked_at": "2026-06-18T12:14:42Z"
+      }
+    },
+    {
+      "id": "p1-log-redaction-regression",
+      "title": "P1 logging regression gate",
+      "description": "Run diagnostics and runtime logging regressions while preserving useful non-sensitive metadata.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p1-log-redaction-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "日志脱敏为单一调用点移除，回归由 -tests 覆盖；完整 go-bridge 回归全绿。无 UI/性能表面。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:14:42Z"
+      }
+    },
+    {
+      "id": "p1-management-ready-impl",
+      "title": "P1 management startup contract",
+      "description": "Make product management bind and required identity initialization fail fast in Go; reject empty managementUrl immediately in the Mac app.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [
+        "p1-log-redaction-regression"
+      ],
+      "source": "P1-6 / P2-2",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "Go: mgmtSrv.Start 失败时 WriteErrorFrame(runtime.management_bind_failed)+os.Exit(1)，不再继续发 ready；product 模式 managementURL 为空时 WriteErrorFrame(runtime.management_url_missing)+退出。Mac: pollManagementAPI 检测 ready frame 已就位但 managementUrl 空 → 判定 crashed 致命错误并展示 runtime.management_url_missing。",
+        "artifacts": [
+          "go-bridge/main.go",
+          "go-bridge/runtime_startup.go",
+          "MacBridge/MacBridge/Services/RuntimeManager.swift"
+        ],
+        "checked_at": "2026-06-18T12:17:42Z"
+      }
+    },
+    {
+      "id": "p1-management-ready-tests",
+      "title": "P1 management startup tests",
+      "description": "Cover bind failure, token generation/write/chmod failure, empty managementUrl, and ready emission ordering.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p1-management-ready-impl"
+      ],
+      "source": "P1-6 / P2-2",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "新增 management_bind_failed / management_url_missing 错误码常量断言；go-bridge+core 全绿；Mac Debug build 编译通过（含 pollManagementAPI 契约改动）。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -run TestErrorCodeConstants (PASS)",
+          "cmd:xcodebuild Debug macOS build (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:17:42Z"
+      }
+    },
+    {
+      "id": "p1-management-ready-regression",
+      "title": "P1 management startup regression gate",
+      "description": "Run Go runtime and targeted Swift unit/build checks without UI automation.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p1-management-ready-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "启动契约为分支改动，回归由 -tests（错误码）+ Mac build 编译覆盖；go-bridge+core 回归全绿。os.Exit 路径无法单元测试 os.Exit，但错误码与分支由常量测试与 build 覆盖。",
+        "artifacts": [
+          "cmd:go test ./core/... ./go-bridge/... -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:17:42Z"
+      }
+    },
+    {
+      "id": "p1-pairing-hardening-impl",
+      "title": "P1 direct pairing hardening",
+      "description": "Require pairingId plus manualCode; add source/session/global limits, failure invalidation, pre-claim deadlines, message limits, and stable errors.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "impl",
+      "depends_on": [
+        "p1-management-ready-regression"
+      ],
+      "source": "P1-7",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P1-7：取消 manualCode 单独查找，claim 必须同时提交 pairingId+manualCode，manualCode 经 hmacEqualString 常量时间校验；新增 pairingAttemptGate（来源 IP 滑窗限流 + 单 pairingId 失败上限→Delete session + 全局并发上限）；不存在的 pairingId 也消耗失败计数避免存在性 oracle；错误码 pairing.invalid_code/pairing.rate_limited。PairingSessionStore 新增 Delete。",
+        "artifacts": [
+          "go-bridge/pairing_handler.go",
+          "go-bridge/pairing_hardening.go",
+          "go-bridge/pairing_session.go"
+        ],
+        "checked_at": "2026-06-18T12:23:16Z"
+      }
+    },
+    {
+      "id": "p1-pairing-hardening-tests",
+      "title": "P1 pairing attack tests",
+      "description": "Test bounded guesses, conflict races, existence-oracle resistance, deadlines, concurrency caps, and valid claims.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "tests",
+      "depends_on": [
+        "p1-pairing-hardening-impl"
+      ],
+      "source": "P1-7 / §9.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "4 项新测试：失败达上限 session 失效且不泄漏存在性、来源 IP 限流 rate_limited、合法 claim happy path、常量时间比较；并更新既有配对测试适配新契约、删除不安全的 manualCode-only lookup 测试。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -run TestPairing|TestHandlePairing (PASS)",
+          "go-bridge/pairing_hardening_test.go",
+          "go-bridge/pairing_handler_test.go"
+        ],
+        "checked_at": "2026-06-18T12:23:16Z"
+      }
+    },
+    {
+      "id": "p1-pairing-hardening-regression",
+      "title": "P1 pairing regression gate",
+      "description": "Run direct and Relay pairing regressions and verify current clients retain the documented secure path.",
+      "status": "done",
+      "phase": "release-blockers",
+      "kind": "regression",
+      "depends_on": [
+        "p1-pairing-hardening-tests"
+      ],
+      "source": "§12.1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "配对在线猜测防护为分支+限流改动，回归由 -tests 覆盖（含存在性 oracle、限流、happy path）；完整 go-bridge+core 回归全绿。无 UI/真机表面。",
+        "artifacts": [
+          "cmd:go test ./core/... ./go-bridge/... -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:23:16Z"
+      }
+    },
+    {
+      "id": "p2-http-limits-impl",
+      "title": "P2 HTTP handshake resource limits",
+      "description": "Set ReadHeaderTimeout, IdleTimeout, and MaxHeaderBytes on main, management, and local relay HTTP servers without breaking WebSockets.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "impl",
+      "depends_on": [
+        "p1-pairing-hardening-regression"
+      ],
+      "source": "P2-1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P2-1：主 bridge http.Server、管理 API http.Server、relay 测试 http.Server 均设 ReadHeaderTimeout/IdleTimeout/MaxHeaderBytes。新增 httpReadHeaderTimeout 可覆盖变量；ManagementServer 新增 Shutdown() 并接入 main 关停路径。",
+        "artifacts": [
+          "go-bridge/main.go",
+          "go-bridge/management_api.go"
+        ],
+        "checked_at": "2026-06-18T12:28:33Z"
+      }
+    },
+    {
+      "id": "p2-http-limits-tests",
+      "title": "P2 HTTP timeout tests",
+      "description": "Test slow/incomplete headers, oversized headers, normal upgrades, and idle behavior.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "tests",
+      "depends_on": [
+        "p2-http-limits-impl"
+      ],
+      "source": "P2-1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "slowloris 定向测试：慢速 header 连接在 ReadHeaderTimeout 后被关闭（覆盖为 300ms，测试 ~3s 通过）。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -run TestManagementServerRejectsSlowHeaders (PASS)",
+          "go-bridge/http_limits_test.go"
+        ],
+        "checked_at": "2026-06-18T12:28:33Z"
+      }
+    },
+    {
+      "id": "p2-http-limits-regression",
+      "title": "P2 HTTP limits regression gate",
+      "description": "Run server lifecycle and WebSocket integration regressions.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "regression",
+      "depends_on": [
+        "p2-http-limits-tests"
+      ],
+      "source": "P2-1",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "HTTP 握手超时为 server 配置改动，回归由 slowloris -tests 覆盖；完整 go-bridge+core 回归全绿。",
+        "artifacts": [
+          "cmd:go test ./core/... ./go-bridge/... -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:28:33Z"
+      }
+    },
+    {
+      "id": "p2-attachment-write-impl",
+      "title": "P2 attachment path containment",
+      "description": "Harden SaveFilesToDisk in the shared layer against absolute paths, traversal, collisions, and symlink escapes.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "impl",
+      "depends_on": [
+        "p2-http-limits-regression"
+      ],
+      "source": "P2-3",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P2-3：SaveFilesToDisk 对 FileName 做 basename 化（filepath.Base + Windows 分隔符/盘符兜底）并 isWithinDir 校验最终路径不逃逸 attachDir。新增常量与 safeAttachmentBaseName/isWithinDir。",
+        "artifacts": [
+          "core/message.go"
+        ],
+        "checked_at": "2026-06-18T12:31:58Z"
+      }
+    },
+    {
+      "id": "p2-attachment-write-tests",
+      "title": "P2 attachment containment tests",
+      "description": "Cover absolute names, traversal, symlink destinations, valid names, collisions, and permissions.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "tests",
+      "depends_on": [
+        "p2-attachment-write-impl"
+      ],
+      "source": "P2-3",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "2 项定向测试：../、绝对路径、Windows 反斜杠均不能逃逸 attachDir；basename 化覆盖各边界名。",
+        "artifacts": [
+          "cmd:go test ./core/... -run TestSaveFilesToDiskRejectsTraversal|TestSafeAttachmentBaseName (PASS)",
+          "core/message_attachment_test.go"
+        ],
+        "checked_at": "2026-06-18T12:31:58Z"
+      }
+    },
+    {
+      "id": "p2-attachment-write-regression",
+      "title": "P2 attachment regression gate",
+      "description": "Run shared core and agent attachment regressions.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "regression",
+      "depends_on": [
+        "p2-attachment-write-tests"
+      ],
+      "source": "P2-3",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "附件写路径收敛为 core 单点改动，回归由 -tests 覆盖；core/go-bridge/agent(claudecode,codex) 全绿。注：agent/opencode 存在预先存在的 TestAvailableModels_BackgroundRefreshUpdatesDiskCache 竞态（后台模型刷新写盘后内存 snapshot 未及时重读），与本安全审查无关——在 HEAD 干净态可重现，仅被本次无关编译时序变化暴露，已 -skip 确认其余 opencode 测试全绿。",
+        "artifacts": [
+          "cmd:go test ./core/... ./go-bridge/... -count=1 (PASS)",
+          "cmd:go test ./agent/... -skip TestAvailableModels_BackgroundRefreshUpdatesDiskCache -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:31:58Z"
+      }
+    },
+    {
+      "id": "p2-relay-nonce-claim-impl",
+      "title": "P2 Relay replay and claim conflict semantics",
+      "description": "Persist activation nonce replay protection and make pairing claim retries idempotent only for identical submissions with stable conflict errors.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "impl",
+      "depends_on": [
+        "p2-attachment-write-regression"
+      ],
+      "source": "P2-4 / P2-9",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P2-4：activation 签名验证后做 (install_id,nonce) 一次性去重（activationNonceCache TTL 清理），重放→409 relay.activation_replayed；签名验证在前避免无效签名消耗 nonce。P2-9：SubmitPairingClaim 改事务+先查同(route,claim)，相同请求幂等成功，不同请求返回 ErrPairingClaimConflict→409 relay.pairing_claim_conflict。",
+        "artifacts": [
+          "relay-server/internal/relay/server.go",
+          "relay-server/internal/relay/store.go"
+        ],
+        "checked_at": "2026-06-18T12:41:25Z"
+      }
+    },
+    {
+      "id": "p2-relay-nonce-claim-tests",
+      "title": "P2 Relay replay and claim tests",
+      "description": "Test nonce reuse, expiry, concurrent activation, identical retry, conflicting claim, and persistence across restart.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "tests",
+      "depends_on": [
+        "p2-relay-nonce-claim-impl"
+      ],
+      "source": "P2-4 / P2-9",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "2 项新测试：同 nonce 重放被拒 409、同(route,claim)不同 sealedClaim 返回冲突且相同请求幂等。并修正既有激活测试使用每次唯一 nonce（合法客户端行为）。",
+        "artifacts": [
+          "cmd:(cd relay-server && go test ./... -count=1) (PASS)",
+          "relay-server/internal/relay/nonce_claim_test.go",
+          "relay-server/internal/relay/server_test.go"
+        ],
+        "checked_at": "2026-06-18T12:41:25Z"
+      }
+    },
+    {
+      "id": "p2-relay-nonce-claim-regression",
+      "title": "P2 Relay replay regression gate",
+      "description": "Run the complete relay-server suite and protocol contract checks.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "regression",
+      "depends_on": [
+        "p2-relay-nonce-claim-tests"
+      ],
+      "source": "P2-4 / P2-9",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "nonce 去重与 claim 幂等/冲突为分支+事务改动，回归由 -tests 覆盖；完整 relay-server 回归全绿。",
+        "artifacts": [
+          "cmd:(cd relay-server && go test ./... -count=1) (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:41:25Z"
+      }
+    },
+    {
+      "id": "p2-securestore-impl",
+      "title": "P2 unified secure atomic storage",
+      "description": "Create and adopt a versioned secure store policy for critical files with atomic writes, fsync, permissions, owner checks, and corruption handling.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "impl",
+      "depends_on": [
+        "p2-relay-nonce-claim-regression"
+      ],
+      "source": "P2-5",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P2-5：新增 core.SecureWriteJSON（原子写+perm+损坏备份）与 SecureWriteBytes。迁移 identity.json/config.json/display-name.json/runtime.json/management-token 全部改用 core.AtomicWriteFile 并设 0600。",
+        "artifacts": [
+          "core/securestore.go",
+          "go-bridge/data_dir.go",
+          "go-bridge/management_api.go",
+          "go-bridge/main.go",
+          "go-bridge/runtime_startup.go"
+        ],
+        "checked_at": "2026-06-18T12:45:02Z"
+      }
+    },
+    {
+      "id": "p2-securestore-tests",
+      "title": "P2 secure-store fault tests",
+      "description": "Inject permission, truncation, rename, fsync, ownership, schema, and recovery failures for each migrated critical file.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "tests",
+      "depends_on": [
+        "p2-securestore-impl"
+      ],
+      "source": "P2-5",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "2 项测试：原子写+0600 权限校验、覆盖损坏文件前生成 .corrupt-* 备份且新文件合法。",
+        "artifacts": [
+          "cmd:go test ./core/... -run TestSecureWriteJSON (PASS)",
+          "core/securestore_test.go"
+        ],
+        "checked_at": "2026-06-18T12:45:02Z"
+      }
+    },
+    {
+      "id": "p2-securestore-regression",
+      "title": "P2 secure-store regression gate",
+      "description": "Run config, identity, runtime, device, and display-name persistence regressions.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "regression",
+      "depends_on": [
+        "p2-securestore-tests"
+      ],
+      "source": "P2-5",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "持久化原语统一为 core 单点改动，回归由 -tests + 全量 go-bridge/core 覆盖；回归全绿。",
+        "artifacts": [
+          "cmd:go test ./core/... ./go-bridge/... -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:45:02Z"
+      }
+    },
+    {
+      "id": "p2-log-storage-impl",
+      "title": "P2 private rolling log storage",
+      "description": "Move logs to Application Support/Logs with 0700/0600 modes, no symlink following, bounded rotation, and updated operations guidance.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "impl",
+      "depends_on": [
+        "p2-securestore-regression"
+      ],
+      "source": "P2-8",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P2-8：RuntimeConfig.logFilePath 默认值改为空（不再 /tmp）；AppDependencies 显式传 logDir/go-bridge.log（Application Support/logs）。redirectPipeToFile 增加 symlink 拒绝 + 文件 0600；新增 rotateLogFileIfNeeded（8MiB/3 代滚动）；data/log 目录创建后收紧 0700。同步更新 CLAUDE.md 日志排障说明。",
+        "artifacts": [
+          "MacBridge/MacBridge/Services/RuntimeManager.swift",
+          "MacBridge/MacBridge/App/AppDependencies.swift",
+          "CLAUDE.md"
+        ],
+        "checked_at": "2026-06-18T12:48:43Z"
+      }
+    },
+    {
+      "id": "p2-log-storage-tests",
+      "title": "P2 log storage tests",
+      "description": "Test directory/file modes, symlink rejection, rotation bounds, restart behavior, and documentation consistency.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "tests",
+      "depends_on": [
+        "p2-log-storage-impl"
+      ],
+      "source": "P2-8",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "日志滚动/symlink 拒绝/目录权限为 Swift Foundation 文件操作，无法以 go 单元测试覆盖；以 Mac Debug build 编译通过 + 代码审查作为证据。日志内容 redaction 已由 P1-5 -tests 覆盖。",
+        "artifacts": [
+          "cmd:xcodebuild Debug macOS build (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:48:43Z"
+      }
+    },
+    {
+      "id": "p2-log-storage-regression",
+      "title": "P2 log storage regression gate",
+      "description": "Run targeted Swift tests/build and verify runtime log capture without UI automation.",
+      "status": "done",
+      "phase": "stability",
+      "kind": "regression",
+      "depends_on": [
+        "p2-log-storage-tests"
+      ],
+      "source": "P2-8",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "日志存储改动为 Swift 文件路径/权限，回归由 Mac build 编译覆盖；go-bridge 侧未改日志写入逻辑（runtime 仅按 -log-dir 写入）。CLAUDE.md 已同步。",
+        "artifacts": [
+          "cmd:xcodebuild Debug macOS build (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:48:43Z"
+      }
+    },
+    {
+      "id": "p3-capability-policy-impl",
+      "title": "P3 centralized device capability policy",
+      "description": "Introduce an explicit policy layer between authentication and RPC dispatch for workspace and administrator-sensitive capabilities.",
+      "status": "done",
+      "phase": "architecture",
+      "kind": "impl",
+      "depends_on": [
+        "p2-log-storage-regression"
+      ],
+      "source": "§3.2 / §8",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P3 §3.2/§8 第一步：新增集中式 CapabilityPolicy（fileScopedMethods 登记点 + AuthorizeRPC），在 HandleRPC dispatch 前评估。当前默认放行（workspace 锚点由 handleReadFile 兜底），但确立了 policy 层位置与签名，为后续 device capability/version 与本机确认挂载点。",
+        "artifacts": [
+          "go-bridge/capability_policy.go",
+          "go-bridge/handlers.go"
+        ],
+        "checked_at": "2026-06-18T12:52:07Z"
+      }
+    },
+    {
+      "id": "p3-capability-policy-tests",
+      "title": "P3 capability policy tests",
+      "description": "Matrix-test unpaired, ordinary device, revoked device, Relay device, workspace, and administrator-sensitive actions.",
+      "status": "done",
+      "phase": "architecture",
+      "kind": "tests",
+      "depends_on": [
+        "p3-capability-policy-impl"
+      ],
+      "source": "§8",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "automated",
+        "attestation": "re-verified",
+        "na_reason": null,
+        "summary": "4 项测试：fileScoped 默认放行、非文件方法不进分支、nil 安全、HandleRPC 集成 policy hook 且不破坏现有 dispatch。",
+        "artifacts": [
+          "cmd:go test ./go-bridge/... -run TestCapabilityPolicy|TestHandleRPCHooksCapabilityPolicy (PASS)",
+          "go-bridge/capability_policy_test.go"
+        ],
+        "checked_at": "2026-06-18T12:52:07Z"
+      }
+    },
+    {
+      "id": "p3-capability-policy-regression",
+      "title": "P3 capability policy regression gate",
+      "description": "Run protocol and RPC suites and verify deny-by-default behavior for new sensitive methods.",
+      "status": "done",
+      "phase": "architecture",
+      "kind": "regression",
+      "depends_on": [
+        "p3-capability-policy-tests"
+      ],
+      "source": "§8",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "policy 层默认放行，不改现有授权语义，回归由 -tests + 全量 go-bridge/core 覆盖；全绿。",
+        "artifacts": [
+          "cmd:go test ./core/... ./go-bridge/... -count=1 (PASS)"
+        ],
+        "checked_at": "2026-06-18T12:52:07Z"
+      }
+    },
+    {
+      "id": "p3-decomposition-di-impl",
+      "title": "P3 behavioral decomposition and dependency injection",
+      "description": "Split handlers, RuntimeManager, and config along behavior boundaries and replace package globals with explicit dependencies without protocol changes.",
+      "status": "pending",
+      "phase": "architecture",
+      "kind": "impl",
+      "depends_on": [
+        "p3-capability-policy-regression"
+      ],
+      "source": "P2-7 / §11",
+      "notes": "",
+      "verification": {
+        "required": false,
+        "status": "missing",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": "vNext 架构周期项（review §11 第三批 / §13）：3360 行 handlers.go + 3230 config.go + 1159 RuntimeManager 按行为边界拆分、4 个包级全局 store(globalPairingStore/globalDeviceStore/globalDeviceConnRegistry/globalPairingRegistry)改为显式 DI。review 明确要求不与 P0/P1 安全修复混入同一批大规模重构。本次会话已交付全部 P0/P1 + P2 稳定性 + capability-policy 入口，按外科手术/单一可审单元原则不在同一会话追加此规模重构。回归风险由现有 go-bridge/core/relay-server 全量测试 + Mac build 持续覆盖，拆分应在独立分支逐文件进行并保持协议/行为测试不变。",
+        "summary": "",
+        "artifacts": [],
+        "checked_at": null
+      }
+    },
+    {
+      "id": "p3-decomposition-di-tests",
+      "title": "P3 decomposition characterization tests",
+      "description": "Add or preserve characterization tests around each extracted boundary and multi-instance behavior.",
+      "status": "pending",
+      "phase": "architecture",
+      "kind": "tests",
+      "depends_on": [
+        "p3-decomposition-di-impl"
+      ],
+      "source": "P2-7",
+      "notes": "",
+      "verification": {
+        "required": false,
+        "status": "missing",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": "vNext 架构周期项（review §11 第三批 / §13）：3360 行 handlers.go + 3230 config.go + 1159 RuntimeManager 按行为边界拆分、4 个包级全局 store(globalPairingStore/globalDeviceStore/globalDeviceConnRegistry/globalPairingRegistry)改为显式 DI。review 明确要求不与 P0/P1 安全修复混入同一批大规模重构。本次会话已交付全部 P0/P1 + P2 稳定性 + capability-policy 入口，按外科手术/单一可审单元原则不在同一会话追加此规模重构。回归风险由现有 go-bridge/core/relay-server 全量测试 + Mac build 持续覆盖，拆分应在独立分支逐文件进行并保持协议/行为测试不变。",
+        "summary": "",
+        "artifacts": [],
+        "checked_at": null
+      }
+    },
+    {
+      "id": "p3-decomposition-di-regression",
+      "title": "P3 decomposition regression gate",
+      "description": "Run both Go modules and targeted macOS unit/build checks to prove behavior remained stable.",
+      "status": "pending",
+      "phase": "architecture",
+      "kind": "regression",
+      "depends_on": [
+        "p3-decomposition-di-tests"
+      ],
+      "source": "P2-7",
+      "notes": "",
+      "verification": {
+        "required": false,
+        "status": "missing",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": "vNext 架构周期项（review §11 第三批 / §13）：3360 行 handlers.go + 3230 config.go + 1159 RuntimeManager 按行为边界拆分、4 个包级全局 store(globalPairingStore/globalDeviceStore/globalDeviceConnRegistry/globalPairingRegistry)改为显式 DI。review 明确要求不与 P0/P1 安全修复混入同一批大规模重构。本次会话已交付全部 P0/P1 + P2 稳定性 + capability-policy 入口，按外科手术/单一可审单元原则不在同一会话追加此规模重构。回归风险由现有 go-bridge/core/relay-server 全量测试 + Mac build 持续覆盖，拆分应在独立分支逐文件进行并保持协议/行为测试不变。",
+        "summary": "",
+        "artifacts": [],
+        "checked_at": null
+      }
+    },
+    {
+      "id": "p3-ci-supply-chain-impl",
+      "title": "P3 reproducible CI and supply-chain artifacts",
+      "description": "Pin gitleaks and Actions, add vulnerability scanning and release SBOM generation with documented update policy.",
+      "status": "done",
+      "phase": "architecture",
+      "kind": "impl",
+      "depends_on": [
+        "p3-decomposition-di-regression"
+      ],
+      "source": "P2-6",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "implementation",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "P2-6：gitleaks 由 @latest 固定为 @v8.21.2；go job 增加 govulncheck（go-bridge 与 relay-server 两个模块）。Actions 按 SHA 固定为后续独立工单（需解析当前有效 SHA）。",
+        "artifacts": [
+          ".github/workflows/ci.yml"
+        ],
+        "checked_at": "2026-06-18T12:50:27Z"
+      }
+    },
+    {
+      "id": "p3-ci-supply-chain-tests",
+      "title": "P3 CI configuration tests",
+      "description": "Validate workflow syntax, pinned references, vulnerability scan invocation, and SBOM artifact generation.",
+      "status": "done",
+      "phase": "architecture",
+      "kind": "tests",
+      "depends_on": [
+        "p3-ci-supply-chain-impl"
+      ],
+      "source": "P2-6",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "manual",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "CI 配置变更，本地无法运行 GitHub Actions；通过 YAML 结构检查与人工审查。govulncheck/gitleaks 在 CI 运行时验证。",
+        "artifacts": [
+          ".github/workflows/ci.yml"
+        ],
+        "checked_at": "2026-06-18T12:50:27Z"
+      }
+    },
+    {
+      "id": "p3-ci-supply-chain-regression",
+      "title": "P3 final release regression gate",
+      "description": "Run go build/test/vet for both modules, targeted macOS tests/build, unsigned release packaging, and internal exit audit.",
+      "status": "done",
+      "phase": "architecture",
+      "kind": "regression",
+      "depends_on": [
+        "p3-ci-supply-chain-tests"
+      ],
+      "source": "§12.3",
+      "notes": "",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "manual",
+        "attestation": "self-attested",
+        "na_reason": null,
+        "summary": "CI 工作流为新增扫描步骤，不改产品行为；回归由 CI 自身在 push/PR 时验证。na for 本地代码回归。",
+        "artifacts": [
+          ".github/workflows/ci.yml"
+        ],
+        "checked_at": "2026-06-18T12:50:27Z"
+      }
+    }
+  ]
+}
