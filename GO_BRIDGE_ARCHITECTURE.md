@@ -116,6 +116,10 @@ turn 完成时，在线订阅设备收到事件；未在线设备的通知写入
 
 因此 iOS 不能把“Bridge 有 liveEventStream”误解为“Claude 的所有外部 turn 都会广播”。
 
+> [!NOTE]
+> 为了支持 Claude Code 长生命周期的 CLI 进程交互与多轮会话，MacBridge 的 `relayEvents` 转发协程在遇到完成/空闲等退出事件时对 `"claude"` 后端特判继续运行（通过 `continue` 绕过退出）。
+> 这意味着每一个通过 iOS 发起过消息的 Claude 会话都会长驻一个转发协程和底层会话对象，其生命周期的终结完全依赖于该会话被显式关闭或删除（届时 events channel 关闭，协程才会自然退出）。在排查协程或内存泄露时需要注意此常驻设计。
+
 ### Codex
 
 支持两种模式：

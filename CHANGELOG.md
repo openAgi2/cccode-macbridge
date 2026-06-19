@@ -8,6 +8,15 @@
 
 ## [Unreleased]
 
+### 2026-06-19 — 恢复拆仓时遗失的维护文档
+
+- 从原一体仓库迁回 MacBridge 构建安装、runtime/端口诊断、go-bridge backend 进程模型和 Relay 部署资料，并作为仓库根目录活文档维护。
+- 按当前内嵌 runtime、持久日志、Management API、HPKE Relay、TLS pin 与独立 Go module 状态重写，删除旧 Node Bridge、外部 cc-connect replace、Copilot sidecar 和 FRP 默认路径等过时说明。
+- 将共享 `CLAUDE.md` 中的 VPS 主机与用户示例改为占位符，避免项目指南携带机器专属部署值。
+- 补齐新 session 冷启动规则、Release 覆盖安装条件，以及 Claude 独立进程、Codex 共享 app-server `4141`、OpenCode HTTP/SSE `64667` 的运行与排障模型；修正失效的 Relay 首装链接和已迁出钥匙串的 identity 描述。
+- 对原一体仓库五份关键根文档做逐节覆盖审计，补回 runtime flags/env、完整故障树、事件管线、registry/rebind、离线通知、OpenCode hybrid 路由矩阵、架构约束与旧 VPS/FRP 自定义路径的现行边界。
+- 在 `CLAUDE.md` 建立维护入口，并链接 iOS 侧端到端交互文档，减少后续排障只看单仓库导致的误判。
+
 ### 2026-06-19 — 修复撤销授权对 relay 连接不生效（安全）
 
 **问题**：在管理 UI 撤销某台 iPhone 的设备授权后，若该 iPhone 走 relay 加密通道连接（默认推荐的远程路径），撤销不会即时生效——iOS 仍能继续访问 Bridge、拉取会话内容，只有杀 App 重启后才进入扫码页。

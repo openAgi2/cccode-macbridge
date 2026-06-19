@@ -1755,6 +1755,18 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 
 	// 通知 iOS 进入 running 状态
 	conn.SendEvent(params.SessionID, msg.BackendID, "session_state_changed", map[string]interface{}{"state": "running"})
+	h.broadcaster.Send(BroadcastEvent{
+		BackendID: msg.BackendID,
+		SessionID: params.SessionID,
+		Directory: extractDir(msg),
+		Message: EventMessage{
+			Type:      "event",
+			SessionID: params.SessionID,
+			BackendID: msg.BackendID,
+			Event:     "session_state_changed",
+			Data:      map[string]interface{}{"state": "running"},
+		},
+	})
 	h.sessions.markRunning(params.SessionID)
 
 	// 订阅该 session 的事件
@@ -1835,6 +1847,10 @@ func (h *Handlers) startRelayIfNotRunning(sessionID string, sess core.AgentSessi
 	}
 }
 
+// NOTE: 对于 Claude Code (backendID == "claude")，因为其为长生命周期的持久 CLI 进程，
+// 且事件通道没有跨进程共享事件总线，它的 relayEvents goroutine 在完成一轮（EventResult）或空闲时
+// 绝不能退出（通过 continue 忽略）。这也意味着该 goroutine 和底层 session 会常驻在内存中，
+// 其最终生命周期的释放依赖于 session 显式关闭/删除导致 events channel 关闭。这需要注意潜在的泄漏风险。
 func (h *Handlers) relayEvents(conn Connection, sess core.AgentSession, sessionID, backendID string) {
 	origSessionID := sessionID
 	defer func() {
@@ -1856,6 +1872,9 @@ func (h *Handlers) relayEvents(conn Connection, sess core.AgentSession, sessionI
 
 	idleTimer := time.NewTimer(relayInitialTimeout)
 	defer idleTimer.Stop()
+	if backendID == "claude" {
+		idleTimer.Stop()
+	}
 
 	for {
 		select {
@@ -1888,7 +1907,9 @@ func (h *Handlers) relayEvents(conn Connection, sess core.AgentSession, sessionI
 				}
 				return
 			}
-			idleTimer.Reset(relayActiveTimeout)
+			if backendID != "claude" {
+				idleTimer.Reset(relayActiveTimeout)
+			}
 			eventCount++
 			h.mu.Lock()
 			dir := h.sessions.directoryForSession(sessionID)
@@ -1932,6 +1953,9 @@ func (h *Handlers) relayEvents(conn Connection, sess core.AgentSession, sessionI
 			if ev.Type == core.EventResult && ev.Done {
 				h.broadcastIdleState(sessionID, backendID)
 				h.recordPendingNotification(sessionID, backendID, "completed", "")
+				if backendID == "claude" {
+					continue
+				}
 				return
 			}
 			if ev.Type == core.EventError {
@@ -1941,10 +1965,16 @@ func (h *Handlers) relayEvents(conn Connection, sess core.AgentSession, sessionI
 				}
 				h.broadcastIdleState(sessionID, backendID)
 				h.recordPendingNotification(sessionID, backendID, "error", errMsg)
+				if backendID == "claude" {
+					continue
+				}
 				return
 			}
 
 		case <-idleTimer.C:
+			if backendID == "claude" {
+				continue
+			}
 			slog.Warn("go-bridge: relayEvents idle timeout, auto-completing", "backendID", backendID, "sessionID", sessionID, "eventsSeen", eventCount)
 			if !h.sessions.isIdle(sessionID) {
 				h.mu.Lock()

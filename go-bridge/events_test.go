@@ -570,6 +570,52 @@ func TestRelayEventsSendsIdleAfterError(t *testing.T) {
 	}
 }
 
+func TestRelayEventsClaudeDoesNotExitOnResultOrError(t *testing.T) {
+	serverConn, clientConn, cleanup := openTestConn(t)
+	defer cleanup()
+
+	handlers := NewHandlers()
+	handlers.broadcaster.Subscribe(serverConn, SubscriptionKey{
+		BackendID: "claude",
+		SessionID: "ses_test",
+	})
+	session := &fakeAgentSession{
+		id:     "ses_test",
+		events: make(chan core.Event, 4),
+	}
+	session.events <- core.Event{Type: core.EventText, Content: "hello"}
+	session.events <- core.Event{Type: core.EventResult, Done: true, Content: "done"}
+	// It should continue running, so we can send another event after EventResult!
+	session.events <- core.Event{Type: core.EventText, Content: "hello2"}
+	session.events <- core.Event{Type: core.EventError, Error: errors.New("boom")}
+	close(session.events)
+
+	done := make(chan struct{})
+	go func() {
+		handlers.relayEvents(serverConn, session, "ses_test", "claude")
+		close(done)
+	}()
+
+	// The events read should include text_delta, turn_completed, session_state_changed (from first result completion),
+	// followed by text_delta (hello2), error, and session_state_changed (from second error completion).
+	events := readEventNames(t, clientConn, 6)
+	want := []string{"text_delta", "turn_completed", "session_state_changed", "text_delta", "error", "session_state_changed"}
+	if len(events) != len(want) {
+		t.Fatalf("got %d events, want %d: %v", len(events), len(want), events)
+	}
+	for i, name := range want {
+		if events[i] != name {
+			t.Errorf("at index %d: got event %q, want %q", i, events[i], name)
+		}
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relayEvents did not exit even after events channel closed")
+	}
+}
+
 func TestRelayEventsSendsTurnCompletedOnChannelClose(t *testing.T) {
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
