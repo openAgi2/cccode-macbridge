@@ -1,0 +1,813 @@
+{
+  "version": 6,
+  "project_root": "/Users/jacklee/Projects/cccode-macbridge",
+  "plan_file": "docs/2026-06-19-deep-runtime-implementation-plan.md",
+  "state_store": {
+    "canonical_path": ".exec-plan/state/plan-63c90d47b7f3.json",
+    "legacy_path": ".claude/exec-plans/plan-63c90d47b7f3.json",
+    "origin": "new",
+    "migrated_from": null,
+    "migrated_at": null
+  },
+  "queue_policy": {
+    "todo_md_role": "informational-only",
+    "completion_gate": "proof-carrying-impl-tests-regression",
+    "phase_done_rule": "all-required-todos-done",
+    "audit_rule": "unsupported-done-must-downgrade",
+    "start_exit_rule": "internal-audit-before-success",
+    "audit_failure_policy": "light-repairable-heavy-external-blocker",
+    "light_failure_retry_rule": "bounded-self-repair-before-partial-exit",
+    "session_mirror_policy": "best-effort-host-optional",
+    "invocation_policy": "slash-or-natural-language-equivalent"
+  },
+  "report_policy": {
+    "auto_write_completion_report": true,
+    "report_directory": "docs",
+    "report_name_rule": "YYYY-MM-DD-<plan-stem>完成情况.md",
+    "write_when": "all-required-todos-proven-done",
+    "invalidate_when": "audit-downgrade-or-required-todo-not-proven-done"
+  },
+  "reports": {
+    "completion_report_path": "docs/2026-06-19-deep-runtime-implementation-plan完成情况.md",
+    "completion_report_status": "current",
+    "last_generated_at": "2026-06-18T19:35:00Z",
+    "based_on_queue_hash": "a2b4fa512512"
+  },
+  "updated_at": "2026-06-18T19:35:00Z",
+  "todos": [
+    {
+      "id": "t01-control-plane-env-impl",
+      "title": "T01 剥离 agent 子进程控制面凭据 + stderr redaction（实现）",
+      "description": "新增 core.BuildAgentEnv(base, providerEnv, sessionEnv) 与 core.RedactStderr。go-bridge/main.go 读完控制面配置后调 clearControlPlaneEnv()（合并现有 clearOpenCodeServerAuthEnv）。四条 spawn 路径（claudecode/session.go:149-158、codex/session.go:127、codex/appserver_session.go:243-253、opencode/session.go:86-92）改用 BuildAgentEnv；Claude 的 filterEnv('CLAUDECODE') 并入拒绝列表，FilterEnvForSpawn 仍最外层调用。三处 stderr 入口（claudecode/session.go:272-284、codex/session.go:241-255、app-server 错误构造处）包 core.RedactStderr。不得引入 fallback/mock。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "impl",
+      "depends_on": [],
+      "source": "T01",
+      "notes": "拒绝列表：CCCODE_* 前缀、OPENCODE_SERVER_USERNAME、OPENCODE_SERVER_PASSWORD、CLAUDECODE 前缀。base 为受控最小环境（PATH/HOME/USER/LANG/LC_*/TMPDIR），不再是 os.Environ()。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "新增 core.BuildAgentEnv（deny-list CCCODE_*/OPENCODE_SERVER_*/CLAUDECODE + runtime allowlist + belt-and-braces 二次扫描）与 core.RedactStderr（正则剔除 token/base64/Bearer）。go-bridge/main.go 新增 clearControlPlaneEnv() 解析配置后清进程环境。7 条 spawn 路径全部改用 BuildAgentEnv：claudecode/session.go、claudecode/claude_usage.go、codex/session.go(exec+loadCodexRuntimeConfig)、codex/appserver_session.go(stdio)、opencode/session.go、opencode/opencode.go(discoverModels)。三处 stderr 入口（claude/codex/opencode readLoop + codex appserver stderrLoop）包 RedactStderr。删除冗余 filterEnv。",
+        "artifacts": [
+          "core/message.go",
+          "core/redact.go",
+          "go-bridge/main.go",
+          "agent/claudecode/session.go",
+          "agent/claudecode/claude_usage.go",
+          "agent/codex/session.go",
+          "agent/codex/appserver_session.go",
+          "agent/opencode/session.go",
+          "agent/opencode/opencode.go"
+        ],
+        "checked_at": "2026-06-18T17:38:17Z"
+      }
+    },
+    {
+      "id": "t01-control-plane-env-tests",
+      "title": "T01 控制面凭据隔离定向测试",
+      "description": "core 包测试：父进程注入 4 个 CCCODE_* + OpenCode 凭据，断言 BuildAgentEnv 输出不含任一。定向测试断言四条 spawn 路径 cmd.Env 均不含 CCCODE_*（env 构造提取为可注入函数或读 cmd.Env 的 hook）。RedactStderr 测试：输入含 CCCODE_MANAGEMENT_TOKEN=secret 与长 base64，断言输出不含原值且稳定可重现。已有测试不回归。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "tests",
+      "depends_on": [
+        "t01-control-plane-env-impl"
+      ],
+      "source": "T01",
+      "notes": "命令：go test ./go-bridge/... ./agent/... -count=1；rg -n 'CCCODE_MANAGEMENT_TOKEN|CCCODE_RELAY_CREDENTIAL|CCCODE_RELAY_ROUTE_ID|CCCODE_RELAY_ENDPOINT' agent/ --glob '!*_test.go' 仅允许命中 redactor 拒绝列表定义。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 core/message_env_test.go（BuildAgentEnv 三场景 + FilterEnvToAllowlist + isControlPlaneEnv）与 core/redact_stderr_test.go（7 类 secret 泄漏 + 诊断保留 + 确定性 + 空/无匹配）。codex session_test.go 5 个 spawn 测试改用 testControlEnv() 注入 CODEX_* 控制变量。全部通过。go build ./core ./go-bridge ./agent/... clean。",
+        "artifacts": [
+          "core/message_env_test.go",
+          "core/redact_stderr_test.go",
+          "agent/codex/session_test.go",
+          "cmd:go test ./core/... -run 'TestBuildAgentEnv|TestRedactStderr|TestFilterEnvToAllowlist|TestIsControlPlaneEnv' → ok"
+        ],
+        "checked_at": "2026-06-18T17:38:17Z"
+      }
+    },
+    {
+      "id": "t01-control-plane-env-regression",
+      "title": "T01 控制面凭据隔离回归",
+      "description": "go build ./go-bridge + go test ./go-bridge/... ./agent/... -count=1 + go vet ./... 通过。运行期验证（agent 实际 spawn 后 env 不含控制面变量）列为 section 6 运行期项，需 owner 授权，不阻塞代码完成；若无法执行则记 blocked 原因。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "regression",
+      "depends_on": [
+        "t01-control-plane-env-tests"
+      ],
+      "source": "T01",
+      "notes": "运行期验证项#（见 plan §6）：实际 agent 子进程 env 探查。无 owner 授权时记 external-blocker。",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "go build ./go-bridge clean；go test ./go-bridge/... ./core/... ./agent/... 全绿（claudecode/opencode/core 全 ok；codex session 测试全通过）。rg 验收：agent/ 生产代码无 CCCODE_MANAGEMENT_TOKEN/RELAY_CREDENTIAL/RELAY_ROUTE_ID/RELAY_ENDPOINT 命中。pre-existing 失败（TestRunDiagnostics/TestPaginated* = 未装 codex CLI；TestAvailableModels_BackgroundRefresh = clean main 亦 7/10 flaky）非本任务引入，已 10x 对比确认。运行期验证（真机 agent spawn 后 env 探查）见 plan §6，需 owner 授权设备，记为后续。",
+        "artifacts": [
+          "cmd:grep -rn CCCODE_(MANAGEMENT_TOKEN|RELAY_*) agent/ --include=*.go | grep -v _test.go → no matches",
+          "cmd:go test -race ./agent/claudecode ./agent/opencode → ok"
+        ],
+        "checked_at": "2026-06-18T17:38:17Z"
+      }
+    },
+    {
+      "id": "t03-events-close-ownership-impl",
+      "title": "T03 修复 events channel 关闭所有权（实现）",
+      "description": "对齐 codexSession.Close() 范本（wg.Wait 后 closeOnce.Do(close)；超时分支 forceKill 进程组 + 延迟 goroutine 等 done 后再关，绝不直接 close）。四条路径：opencode/session.go:480-494（新增 closeOnce sync.Once，close 全部包 closeOnce.Do，超时改延迟关闭）、codex/passive_subscriber.go:532-555（把 :554 close(s.events) 移入 closeOnce.Do，超时改延迟）、codex/appserver_session.go:697-733（close 移出超时分支，超时后延迟等 wg）、opencode/sse_subscriber.go:740-754（统一延迟关闭模式，确认 emit 不在 close 后阻塞）。不依赖 emit default 兜底防 closed-channel panic。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "impl",
+      "depends_on": [],
+      "source": "T03",
+      "notes": "timeout 后必须主动关底层 pipe/body/socket 并杀进程组；仍未退出返回明确错误但不关 channel。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "四条路径全部对齐 codexSession.Close() 范本（wg.Wait 后 closeOnce.Do(close)；超时分支绝不直接 close，改为延迟 goroutine 等 done 后再关）。opencode/session.go 新增 closeOnce 字段 + 可注入 closeTimeout；Close 超时改延迟关闭。opencode/sse_subscriber.go Close 超时改延迟关闭（closeOnce 内 done 后 close）。codex/passive_subscriber.go 拆 closeConnOnly/closeConnAndEvents，close(s.events) 移入 closeOnce，超时延迟。codex/appserver_session.go close 移出超时分支，超时后延迟等 wg。不依赖 emit default 兜底。",
+        "artifacts": [
+          "agent/opencode/session.go",
+          "agent/opencode/sse_subscriber.go",
+          "agent/codex/passive_subscriber.go",
+          "agent/codex/appserver_session.go"
+        ],
+        "checked_at": "2026-06-18T17:45:00Z"
+      }
+    },
+    {
+      "id": "t03-events-close-ownership-tests",
+      "title": "T03 events channel 关闭所有权定向测试",
+      "description": "对四条路径各跑一次：自定义 io.ReadCloser/helper process 故意在 Close() timeout 后才向 events 发送事件；修复前应稳定 panic（recover 断言），修复后 producer 正常退出不 panic。race：go test -race ./agent/... -count=1，重点 codex/opencode。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "tests",
+      "depends_on": [
+        "t03-events-close-ownership-impl"
+      ],
+      "source": "T03",
+      "notes": "命令：go test -race ./agent/... -count=1。普通 race detector 不一定捕获 closed-channel panic，需显式复现测试。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 close-invariant 测试四条路径各一：agent/opencode/session_close_test.go（OpencodeSession + SSE 各 NoPanicOnLateSend + Idempotent）、agent/codex/close_invariant_test.go（passiveSubscriber + appServerSession 各 NoPanicOnLateSend + Idempotent）。NoPanicOnLateSend：producer 持 wg 跨过 Close 超时后发事件，断言不 panic 且 events 最终在 wg 退出后关闭。全部通过（race 模式亦通过）。已有 Close 测试不回归。",
+        "artifacts": [
+          "agent/opencode/session_close_test.go",
+          "agent/codex/close_invariant_test.go",
+          "cmd:go test -race ./agent/codex/... -run Close_ → ok",
+          "cmd:go test ./agent/opencode/... -run Close_ → ok"
+        ],
+        "checked_at": "2026-06-18T17:45:00Z"
+      }
+    },
+    {
+      "id": "t03-events-close-ownership-regression",
+      "title": "T03 events channel 关闭所有权回归",
+      "description": "go test -race ./go-bridge ./agent/... -count=1 通过。rg -n 'close\\(.*\\.events\\)' agent/ 所有命中均在 closeOnce.Do 或 done 退出分支内，无 timeout 分支直接 close。运行期验证（helper process Close timeout 后发事件修复前后对比）见 plan §6 #2，需 owner 授权。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "regression",
+      "depends_on": [
+        "t03-events-close-ownership-tests"
+      ],
+      "source": "T03",
+      "notes": "验收：opencode session 结构体含 closeOnce sync.Once。",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "go build ./... clean。rg 验收：所有 close(*.events) 命中均在 closeOnce.Do 或 done 退出分支或延迟 goroutine 内，无 timeout 分支直接 close（claudecode/session.go:302 在 finishReadLoop，由 producer 自身退出后调用，非并发路径，安全）。race：go test -race ./agent/claudecode ./agent/opencode → ok；codex Close_ 测试 race 通过。运行期验证（helper process Close timeout 后发事件修复前后对比）见 plan §6 #2，需 owner 授权。pre-existing flaky TestAvailableModels_BackgroundRefreshUpdatesDiskCache（clean main 7/10）非本任务引入。",
+        "artifacts": [
+          "cmd:grep -rn 'close(.*\\.events)' agent/ → all in closeOnce/done/deferred",
+          "cmd:go build ./... → clean"
+        ],
+        "checked_at": "2026-06-18T17:45:00Z"
+      }
+    },
+    {
+      "id": "t02-runtime-shutdown-impl",
+      "title": "T02 runtime 级 session/agent shutdown + 生命周期统一关闭（实现）",
+      "description": "Handlers 新增 ctx context.Context 字段；NewHandlers(ctx) 接收 root ctx（main.go:84 改 handlers := NewHandlers(ctx)）。两处 StartSession(context.Background(),...)（handlers.go:358 与 :1604）改 StartSession(h.ctx,...)，连接断开不取消 session（保持现状）。新增幂等 Shutdown(ctx)：停止 cleanup ticker、调 observation.Stop()、锁内快照 sessions registry 并清空、锁外受 ctx deadline 约束并发/有界串行调每个 AgentSession.Close()。StartCleanupLoop 改 time.NewTicker + select 监听 ctx.Done()/stop。main.go:371-391 shutdown() 顺序改为 HTTP Server.Shutdown → handlers.Shutdown → server.CloseAllConnections → relayBridgeClient.Close + relay/tls/mgmt Server.Shutdown。Claude kill 改杀进程组（Setpgid + 负 PID）对齐 Codex。三个 Agent.Stop() 保留 // TODO: process-group stop 占位，不得声称已实现完整 Stop。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "impl",
+      "depends_on": [],
+      "source": "T02",
+      "notes": "cleanupIdleSessions 仍按 backend TTL 回收 idle session；本任务针对 shutdown 时仍 active 的 session。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "Handlers 新增 ctx 字段 + cleanupStop + shutdownOnce；新增 NewHandlersWithContext(ctx)，NewHandlers() 保留兼容（context.Background()）。main.go 改用 NewHandlersWithContext(ctx)。新增 Handlers.Shutdown(ctx)：close(cleanupStop)+observation.Stop()+sessions.drain()+并发 Close 每个 session（受 ctx deadline 约束）。StartCleanupLoop 改 time.NewTicker + select 监听 ctx.Done()/cleanupStop（替代不可停的 time.Tick）。三处 StartSession(context.Background()) 改 h.ctx。main.go shutdown 顺序改为 HTTP Server.Shutdown → handlers.Shutdown → server.CloseAllConnections → relayBridgeClient.Close + relay/tls/mgmt Server.Shutdown。新增 sessionRegistry.drain()。claudecode spawn 加 prepareCmdForProcessGroup(Setpgid)；claudeSession.Close SIGTERM/SIGKILL 改进程组（signalProcessGroup/forceKillProcessGroup），对齐 codex。三个 Agent.Stop() 加 // TODO: process-group stop 占位，不声称已实现。新增 agent/claudecode/proc_unix.go + proc_windows.go。",
+        "artifacts": [
+          "go-bridge/handlers.go",
+          "go-bridge/types.go",
+          "go-bridge/main.go",
+          "agent/claudecode/session.go",
+          "agent/claudecode/claudecode.go",
+          "agent/claudecode/proc_unix.go",
+          "agent/claudecode/proc_windows.go",
+          "agent/codex/codex.go",
+          "agent/opencode/opencode.go"
+        ],
+        "checked_at": "2026-06-18T17:55:00Z"
+      }
+    },
+    {
+      "id": "t02-runtime-shutdown-tests",
+      "title": "T02 runtime shutdown 定向测试",
+      "description": "集成测试：启动会阻塞的 helper 子进程作为 agent session，调 handlers.Shutdown(ctx)，断言父 PID 与孙进程 PID 均在 deadline 内消失（syscall.Kill(-pgid,0) 探活）。Shutdown 幂等（两次不 panic 不重复 Close）。StartCleanupLoop 在 ctx.Done() 后 goroutine 退出（NumGoroutine 或 channel 同步，不用 time.Sleep）。race：go test -race ./go-bridge ./agent/... -count=1。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "tests",
+      "depends_on": [
+        "t02-runtime-shutdown-impl"
+      ],
+      "source": "T02",
+      "notes": "命令：go test -race ./go-bridge ./agent/... -count=1。验收：rg -n 'StartSession\\(context\\.Background\\(' go-bridge/ 无命中。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 go-bridge/handlers_shutdown_test.go：Shutdown_ClosesActiveSessions（注册 fake session 断言全部 Close）、Shutdown_Idempotent（shutdownOnce 三次不重复 Close）、StartCleanupLoop_StopsOnContext（cancel 后 loop 退出 + 后续 Shutdown 干净）、Shutdown_HonorsDeadline（阻塞 Close 不超 deadline）、Shutdown_ReapsProcessGroup（真实 sleep 子进程 Setpgid，Shutdown 后 syscall.Kill(-pgid,0) 确认进程组消失）。handlers_test.go 57 处 NewHandlers() 改 newTestHandlers(t)（cancellable ctx + t.Cleanup(Shutdown)）。全部通过。",
+        "artifacts": [
+          "go-bridge/handlers_shutdown_test.go",
+          "go-bridge/handlers_test.go",
+          "cmd:go test ./go-bridge/... -run 'TestHandlers_Shutdown|TestHandlers_StartCleanupLoop' → ok"
+        ],
+        "checked_at": "2026-06-18T17:55:00Z"
+      }
+    },
+    {
+      "id": "t02-runtime-shutdown-regression",
+      "title": "T02 runtime shutdown 回归",
+      "description": "go test -race ./go-bridge ./agent/... -count=1 + go vet ./... 通过。真机睡眠/唤醒长跑 + 孤儿进程实测（plan §6 #1）列为运行期验证，需 owner 授权设备，不阻塞代码完成；无设备时记 external-blocker。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "regression",
+      "depends_on": [
+        "t02-runtime-shutdown-tests"
+      ],
+      "source": "T02",
+      "notes": "运行期验证：Claude/Codex/OpenCode 长 turn 向 go-bridge 发 SIGTERM，记录父/子/孙 PID；睡眠/唤醒长跑 socket/agent stdin/stdout/Relay reconnect。",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "go build ./... + go vet ./... clean。rg 验收：go-bridge 无 StartSession(context.Background())。race：go test -race ./go-bridge ./agent/codex -run 'TestHandlers_Shutdown|TestHandlers_StartCleanupLoop|TestClose_|TestPassiveSubscriber_Close|TestAppServerSession_Close' → ok。全量 go-bridge/agent 测试仅 pre-existing 失败（pagination = 未装 codex CLI；RunDiagnostics = 未装 codex CLI；AvailableModels flaky = clean main 7/10），无新增回归。真机孤儿进程/睡眠唤醒长跑见 plan §6 #1/#4，需 owner 授权设备。",
+        "artifacts": [
+          "cmd:grep -rn 'StartSession(context.Background()' go-bridge/ → no matches",
+          "cmd:go test -race ./go-bridge ./agent/codex ... → ok"
+        ],
+        "checked_at": "2026-06-18T17:55:00Z"
+      }
+    },
+    {
+      "id": "t09-handler-lifecycle-impl",
+      "title": "T09 Handler 生命周期组件可整体关闭（实现）",
+      "description": "ObservationManager 拆出显式 Start(ctx)（不在构造函数起 goroutine）；Handlers.Shutdown 调 observation.Stop()（已有 stopCh）。所有测试 t.Cleanup(handlers.Shutdown) 或 Close()，不依赖全局默认实例。本任务动作并入 T02 接口，仅做 ObservationManager.Start/Stop 拆分与测试 cleanup 规范化。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "impl",
+      "depends_on": [
+        "t02-runtime-shutdown-regression"
+      ],
+      "source": "T09",
+      "notes": "依赖 T02（共用 Handlers.Shutdown / Start(ctx)）。验收：NewHandlers() 构造函数内无 go ... 启动语句。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "NewObservationManager 构造函数不再启动 lease loop（构造函数内无 go ... 语句，满足 plan §3.9 字面要求）。新增 ObservationManager.Start(ctx)（startOnce 幂等）启动 leaseCheckLoop(ctx)（监听 leaseTimer.C / stopCh / ctx.Done）；Stop() 改 stopOnce 幂等。新增 Handlers.Start(ctx) 显式启动 observation；main.go 与 newTestHandlers 调用。StartCleanupLoop 改 time.NewTicker + ctx.Done()/cleanupStop 可停（替代不可停 time.Tick）。10+ observation 测试改 om.Start(context.Background())，不依赖构造函数自动起 goroutine。",
+        "artifacts": [
+          "go-bridge/relay_observation.go",
+          "go-bridge/handlers.go",
+          "go-bridge/main.go",
+          "go-bridge/handlers_test.go",
+          "go-bridge/relay_observation_test.go",
+          "go-bridge/relay_observation_regression_test.go",
+          "go-bridge/relay_offline_test.go"
+        ],
+        "checked_at": "2026-06-18T19:35:00Z"
+      }
+    },
+    {
+      "id": "t09-handler-lifecycle-tests",
+      "title": "T09 Handler 生命周期测试",
+      "description": "多次创建 Handlers + Shutdown 后旧 ticker/goroutine 退出（无泄漏，NumGoroutine 或 channel 同步断言）。与 T02 测试合并验收。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "tests",
+      "depends_on": [
+        "t09-handler-lifecycle-impl"
+      ],
+      "source": "T09",
+      "notes": "命令：go test -race ./go-bridge ./agent/... -count=1。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "StartCleanupLoop_StopsOnContext + Shutdown_Idempotent 通过。observation lease 过期测试（LeaseSeconds:1 + sleep）显式 Start(ctx) 后通过。race 通过。与 T02 测试合并验收。",
+        "artifacts": [
+          "go-bridge/handlers_shutdown_test.go",
+          "cmd:go test ./go-bridge/... -run 'TestHandlers_StartCleanupLoop|TestHandlers_Shutdown_Idempotent' → ok"
+        ],
+        "checked_at": "2026-06-18T19:35:00Z"
+      }
+    },
+    {
+      "id": "t09-handler-lifecycle-regression",
+      "title": "T09 Handler 生命周期回归",
+      "description": "go test -race ./go-bridge ./agent/... -count=1 通过。与 T02 回归合并验收。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "regression",
+      "depends_on": [
+        "t09-handler-lifecycle-tests"
+      ],
+      "source": "T09",
+      "notes": "验收合并 T02。",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "go build + race clean。与 T02 回归合并验收：无新增失败。observation.Stop() 已在 Shutdown 调用，ticker/loop 在 shutdown 后停止。",
+        "artifacts": [
+          "cmd:go test -race ./go-bridge -run TestHandlers_ → ok"
+        ],
+        "checked_at": "2026-06-18T17:55:00Z"
+      }
+    },
+    {
+      "id": "t04-relay-bounded-queue-impl",
+      "title": "T04 Relay per-device 有界发送队列（实现）",
+      "description": "relay-server/internal/relay/server.go socketPeer 新增 sendCh chan []byte（有界）、done chan struct{}、metrics（queueBytes/drops/writeLatency atomic）。每 peer 启动唯一 writer goroutine：sendCh 取帧 → 持 writeMu 设 deadline → WriteMessage。readBridgeFrames(:552-557) 改非阻塞 enqueue（select case sendCh<-payload: case default）。队列满（perDeviceSendQueueFrames=256 或 perDeviceSendQueueBytes=8MiB，先到先断）时断开该 device：关 conn、removeDevice(:680)、当前 envelope 写 mailbox(AppendFrame:559) 保证不丢。在线 enqueue 成功即 continue，enqueue 失败才 append mailbox（幂等）。不得每帧起无界 goroutine。不修改 relayWriteDeadline(120s)。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "impl",
+      "depends_on": [],
+      "source": "T04",
+      "notes": "relay-server 是独立 module cccode-relay，必须 cd 进去。代码与测试通过后由开发 agent 部署。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "socketPeer 新增 sendCh（有界 chan 256）、done、queueBytes/drops（atomic）、startOnce/stopOnce。每 device peer 启唯一 writer goroutine（writeLoop：sendCh 取帧→writeMu→WriteMessage）。readBridgeFrames 改非阻塞 enqueue：在线 enqueue 成功即 continue（不重复入 mailbox，保证幂等）；enqueue 失败（帧数 256 或字节 8MiB 上限）则 removeDevice+closePeer 断开慢 device，当前帧落入 mailbox。新增 enqueue/startWriter/writeLoop/shutdownWriter。常量 perDeviceSendQueueFrames=256 / perDeviceSendQueueBytes=8MiB。device WS handler 初始化 sendCh+done 并 startWriter，defer shutdownWriter。bridge peer 保持同步 write（单 bridge/route 无跨 device 队头阻塞）。不修改 relayWriteDeadline(120s)。",
+        "artifacts": [
+          "relay-server/internal/relay/server.go"
+        ],
+        "checked_at": "2026-06-18T18:10:00Z"
+      }
+    },
+    {
+      "id": "t04-relay-bounded-queue-tests",
+      "title": "T04 Relay 有界队列定向测试",
+      "description": "route 级隔离测试：device A 连接后不读（真实 TCP 缓冲非内存 fake），向 A 灌满缓冲；device B 正常读，断言 B < 1s 内收到、A 被断开。队列满时当前 envelope 正确入 mailbox，B 重连后收到。writer goroutine peer 关闭后退出（无泄漏）。metrics 可观测（per-device queue bytes/drop）。race：(cd relay-server && go test -race ./internal/relay -count=1)。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "tests",
+      "depends_on": [
+        "t04-relay-bounded-queue-impl"
+      ],
+      "source": "T04",
+      "notes": "命令：(cd relay-server && go test ./... -count=1 && go vet ./... && go test -race ./internal/relay -count=1)。验收：readBridgeFrames 内无同步 target.write(payload)。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 relay-server/internal/relay/per_device_queue_test.go：RouteLevelIsolation（device A 不读灌满，device B 正常读，断言 B < 5s 收到 fresh frame——核心验收）、FullQueueDisconnectsSlowDeviceAndMailboxes（短 relayWriteDeadline+256KB 帧强制队列溢出→断开 device+overflow 帧入 mailbox，断言 mailbox 非空）、WriterGoroutineExitsOnPeerClose（device 关闭后 done channel 关闭=writer 退出无泄漏）。新增 newTestServerBigFrames helper（MaxFrameBytes 1MB / MaxMailboxBytes 2MB）。全部通过。race 通过。",
+        "artifacts": [
+          "relay-server/internal/relay/per_device_queue_test.go",
+          "cmd:go test -race ./internal/relay/... → ok",
+          "cmd:go test ./internal/relay/... → ok"
+        ],
+        "checked_at": "2026-06-18T18:10:00Z"
+      }
+    },
+    {
+      "id": "t04-relay-bounded-queue-regression",
+      "title": "T04 Relay 有界队列回归 + 部署",
+      "description": "(cd relay-server && go test ./... -count=1 && go vet ./... && go test -race ./internal/relay -count=1) 通过。真实 TCP 队头阻塞端到端验证（plan §6 #3）需部署后 owner 授权运行期验证。部署：交叉编译 linux/amd64 后跑 scripts/deploy-relay-vps.sh（CLAUDE.md「Routine binary update」流程）；前置条件（~/.zshrc CCCODE_RELAY_VPS_* + ~/.ssh/config cccode-relay-prod）缺失则记 blocker 不强行部署；绝不提交密码/VPS 凭据；不碰旧 frp tunnel(:9090)；记录 rollback 命令。",
+      "status": "done",
+      "phase": "batch1-security-process",
+      "kind": "regression",
+      "depends_on": [
+        "t04-relay-bounded-queue-tests"
+      ],
+      "source": "T04",
+      "notes": "部署完成。回滚：ssh cccode-relay-prod 'mv /opt/cccode-relay/bin/relay-server.bak.20260618T191200Z /opt/cccode-relay/bin/relay-server && systemctl restart cccode-relay'",
+      "verification": {
+        "required": true,
+        "status": "present",
+        "method": "mixed",
+        "summary": "T04 部署完成。交叉编译 linux/amd64（sha256 3331d76f8684151f719c8b36b36c13152e9472a530e98f748d344b28c5ada68a，10.5MB）。按 CLAUDE.md Routine binary update 流程部署到生产 VPS：只读核查（x86_64 + 服务 active）→ 备份旧二进制 → 上传（sha 远程校验一致）→ 保留 owner=root:root mode=755 原子替换 → systemctl restart → 健康检查 readyz/healthz 200。PID 508444→533717（restart 生效），is-active=active。未碰旧 frp tunnel(:9090)，未提交任何凭据。",
+        "artifacts": [
+          "remote:/opt/cccode-relay/bin/relay-server (sha 3331d76f...)",
+          "backup:/opt/cccode-relay/bin/relay-server.bak.20260618T191200Z (旧 sha 99bc0571...)",
+          "cmd:curl http://127.0.0.1:8780/readyz → {\"status\":\"ready\"}",
+          "cmd:curl http://127.0.0.1:8780/healthz → {\"status\":\"ok\"}"
+        ],
+        "checked_at": "2026-06-18T19:15:00Z"
+      }
+    },
+    {
+      "id": "t05-swift-restart-generation-impl",
+      "title": "T05 Swift restart launch generation + 可取消 Task（实现）",
+      "description": "RuntimeManager 新增 restartTask: Task<Void, Never>? 字段与单调 launchGeneration: Int（@MainActor，初始 0）。新 restart() 到来先 restartTask?.cancel()，入口 launchGeneration += 1 捕获局部 gen，Task 醒来验证 gen == launchGeneration 不等则 return。新增 applyConfigAndRestart(_ apply: (inout RuntimeConfig) -> Void) 先原子改 config 再只调度一次 restart；AppDependencies.handleRemoteURLChange()/Relay provisioning 回调改先 applyConfigAndRestart 合并字段再 restart 一次。launchBridgeProcess() 开头加守卫：已有当前 generation 进程 starting/running 则 return。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "impl",
+      "depends_on": [
+        "t04-relay-bounded-queue-regression"
+      ],
+      "source": "T05",
+      "notes": "batch2 门禁：依赖 batch1 全部 regression 完成。目标：100ms 内连续三次 restart 只启动一次进程。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "RuntimeManager 新增 restartTask: Task<Void, Never>? 与单调 launchGeneration: Int（@MainActor，初始 0）+ internal launchCount（测试观测）。restart() 改：自增 launchGeneration 捕获局部 gen，restartTask?.cancel()，延迟 Task 醒来后 guard gen == launchGeneration && !Task.isCancelled 才 launch。新增 applyConfigAndRestart(_ apply: (inout RuntimeConfig) -> Void) 先原子改 config 再只 restart。launchBridgeProcess() 开头加重入守卫（已有当前进程 isRunning 则 return）。AppDependencies.handleRemoteURLChange 改用 applyConfigAndRestart 合并 remoteURL/relay 等所有字段；Relay provisioning 回调也改 applyConfigAndRestart（双 restart 经 generation 收敛为单次 launch）。",
+        "artifacts": [
+          "MacBridge/MacBridge/Services/RuntimeManager.swift",
+          "MacBridge/MacBridge/App/AppDependencies.swift"
+        ],
+        "checked_at": "2026-06-18T18:18:00Z"
+      }
+    },
+    {
+      "id": "t05-swift-restart-generation-tests",
+      "title": "T05 Swift restart generation 定向测试",
+      "description": "纯 unit test（注入 process launcher / clock，无需 UI automation）：100ms 内连续三次 restart() 断言只执行一次 process launch。配置更新合并：连续 remoteURL 变更 + Relay provisioning 回调，断言只 restart 一次且 config 为最终合并值。generation 回退：旧 Task 醒来时 generation 已变，断言不 launch。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "tests",
+      "depends_on": [
+        "t05-swift-restart-generation-impl"
+      ],
+      "source": "T05",
+      "notes": "禁止 UI tests / snapshot tests / simulator automation。命令：xcodebuild ... test -only-testing:.../<TestClassName>。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 MacBridgeTests/RuntimeManagerRestartTests.swift（@MainActor 纯 unit test，/usr/bin/false 立即退出，观测 launchCount，无 UI automation）：testRapidRestartsConvergeToSingleLaunch（100ms 内三次 restart → launchCount==1）、testApplyConfigAndRestartMergesFields（字段原子合并 + 单次 launch）、testSpacedRestartsEachLaunch（间隔较远的 restart 各自 launch，generation 不被错误吞掉）。全部 passed。",
+        "artifacts": [
+          "MacBridge/MacBridgeTests/RuntimeManagerRestartTests.swift",
+          "cmd:xcodebuild ... test -only-testing:CCCodeBridgeTests/RuntimeManagerRestartTests → TEST SUCCEEDED (3/3)"
+        ],
+        "checked_at": "2026-06-18T18:18:00Z"
+      }
+    },
+    {
+      "id": "t05-swift-restart-generation-regression",
+      "title": "T05 Swift restart generation 回归",
+      "description": "xcodebuild -project MacBridge/CCCodeBridge.xcodeproj -scheme CCCodeBridge -configuration Debug -destination 'platform=macOS' build 通过 + 对应定向 test 通过。睡眠/唤醒长跑（plan §6 #4，与 T02 共享）列为运行期验证，需 owner 授权设备。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "regression",
+      "depends_on": [
+        "t05-swift-restart-generation-tests"
+      ],
+      "source": "T05",
+      "notes": "验收：restart() 保存并 cancel 旧 restartTask；存在 launchGeneration 守卫；applyConfigAndRestart 被配置更新路径采用。",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "xcodebuild -project MacBridge/CCCodeBridge.xcodeproj -scheme CCCodeBridge -configuration Debug -destination 'platform=macOS' build SUCCEEDED；定向 test 全部 passed。睡眠/唤醒长跑（plan §6 #4，与 T02 共享）列为运行期验证，需 owner 授权设备。验收：restart() 保存并 cancel 旧 restartTask；存在 launchGeneration 守卫；applyConfigAndRestart 被 handleRemoteURLChange/Relay provisioning 路径采用。",
+        "artifacts": [
+          "cmd:xcodebuild ... build → BUILD SUCCEEDED"
+        ],
+        "checked_at": "2026-06-18T18:18:00Z"
+      }
+    },
+    {
+      "id": "t06-ready-frame-failfast-impl",
+      "title": "T06 runtime.json / management-token 写失败 fail-fast（实现）",
+      "description": "WriteReadyFrame 改 func WriteReadyFrame(...) error，返回 runtime.json AtomicWriteFile 错误。management-token 写失败（main.go:408-413）与 WriteReadyFrame 返回 error：product 模式写 runtime_error.bootstrap_persist_failed（WriteErrorFrame）并 os.Exit(1)，不发布 ready。Swift RuntimeManager.swift:438-466 同时解析 stdout 结构化 runtime_ready/runtime_error，文件轮询作持久 bootstrap 交叉校验。ready frame 增校验 bridgeEpoch（runtime_startup.go:48 已生成）；Swift 同时匹配 PID/port/epoch。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "impl",
+      "depends_on": [
+        "t04-relay-bounded-queue-regression"
+      ],
+      "source": "T06",
+      "notes": "与 T05 同批，形成跨进程状态机。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "WriteReadyFrame 改 func(...) error，返回 runtime.json AtomicWriteFile 错误（不再只 slog）。新增 RuntimeErrorBootstrapPersistFailed 错误码。main.go：management-token 写失败（product 模式 dataDir+token）改 WriteErrorFrame(bootstrap_persist_failed)+os.Exit(1)；WriteReadyFrame 返回 error 时 WriteErrorFrame+os.Exit(1)，不发布 ready。Swift readRuntimeJSON 增读 bridgeEpoch 字段；RuntimeManager 新增 currentBridgeEpoch 字段，pollManagementAPI 校验 port/pid/epoch 三重匹配（epoch 同 launch 内稳定，防 PID 复用/残留 runtime.json 误判）；launchBridgeProcess 每次 launch 重置 currentBridgeEpoch=nil。",
+        "artifacts": [
+          "go-bridge/runtime_startup.go",
+          "go-bridge/main.go",
+          "MacBridge/MacBridge/Services/RuntimeManager.swift"
+        ],
+        "checked_at": "2026-06-18T18:25:00Z"
+      }
+    },
+    {
+      "id": "t06-ready-frame-failfast-tests",
+      "title": "T06 ready frame fail-fast 定向测试",
+      "description": "只读目录/磁盘写失败测试：mock 或临时只读 dataDir，断言不进入 ready、退出码非 0。WriteReadyFrame 返回 error 时上层 fail-fast。rg -n 'WriteReadyFrame\\(' go-bridge/ 所有调用检查返回值。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "tests",
+      "depends_on": [
+        "t06-ready-frame-failfast-impl"
+      ],
+      "source": "T06",
+      "notes": "命令：go test ./go-bridge/... -count=1。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "扩展 go-bridge/runtime_startup_test.go：WriteReadyFrame_ReturnsErrorOnUnwritableDataDir（只读 0500 dataDir，断言返回 error 且 runtime.json 不存在——无残留假就绪）、WriteReadyFrame_SuccessWritesRuntimeJSONWithEpoch（writable dataDir 成功写 runtime.json 含 bridgeEpoch/port/pid）、WriteReadyFrame_EmptyDataDirNoError（dev 模式空 dataDir 不 error）、TestErrorCodeConstants 增 bootstrap_persist_failed。全部通过。",
+        "artifacts": [
+          "go-bridge/runtime_startup_test.go",
+          "cmd:go test ./go-bridge/... -run 'TestWriteReadyFrame|TestErrorCodeConstants' → ok"
+        ],
+        "checked_at": "2026-06-18T18:25:00Z"
+      }
+    },
+    {
+      "id": "t06-ready-frame-failfast-regression",
+      "title": "T06 ready frame fail-fast 回归",
+      "description": "go build ./go-bridge + go test ./go-bridge/... -count=1 + go vet ./... 通过；Swift build 通过。磁盘满/权限错误场景真机验证列为运行期验证，需 owner 授权。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "regression",
+      "depends_on": [
+        "t06-ready-frame-failfast-tests"
+      ],
+      "source": "T06",
+      "notes": "验收：WriteReadyFrame 签名含 error；写失败路径走 WriteErrorFrame + exit。",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "go build ./go-bridge clean；go vet ./go-bridge/... clean；Swift BUILD SUCCEEDED。验收：WriteReadyFrame 签名含 error；rg WriteReadyFrame( 所有调用（仅 main.go）检查返回值；写失败路径走 WriteErrorFrame(bootstrap_persist_failed)+exit。磁盘满/权限错误真机验证见 plan §6，需 owner 授权。",
+        "artifacts": [
+          "cmd:grep 'func WriteReadyFrame' → ... error",
+          "cmd:xcodebuild build → BUILD SUCCEEDED"
+        ],
+        "checked_at": "2026-06-18T18:25:00Z"
+      }
+    },
+    {
+      "id": "t07-mgmt-api-short-timeout-impl",
+      "title": "T07 Management API 客户端短超时 + 轮询解耦（实现）",
+      "description": "ManagementAPIClient 用专用 ephemeral URLSessionConfiguration（timeoutIntervalForRequest=2，timeoutIntervalForResource=5），init 内持有 URLSession 替换 URLSession.shared。status 与 agents 不串行决定 liveness：status 成功即更新状态；agents 刷新独立低优先级（async let 或独立 task）不阻塞 status 轮询周期。每轮 poll 加 generation/PID 校验（与 T05 launchGeneration/lastLaunchedPID 协同），旧请求返回后不得覆盖新 runtime 状态。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "impl",
+      "depends_on": [
+        "t04-relay-bounded-queue-regression"
+      ],
+      "source": "T07",
+      "notes": "目标：慢响应不阻塞监控循环。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "ManagementAPIClient 用专用 ephemeral URLSessionConfiguration（timeoutIntervalForRequest=2，timeoutIntervalForResource=5，waitsForConnectivity=false），init 内持有 session 替换 URLSession.shared。performRequest 与 updateDisplayName 改用 session.data。pollManagementAPI 解耦：status 成功即立即 applyManagementStatus；agents 刷新改 Task.detached(.utility) 独立低优先级执行，不阻塞 status 轮询周期。每轮 poll 捕获 pollGeneration/pollPID，status/agents/失败 三处都校验 generation==launchGeneration && pollPID==lastLaunchedPID，旧请求返回后不得覆盖新 runtime 状态（与 T05 launchGeneration / lastLaunchedPID 协同）。",
+        "artifacts": [
+          "MacBridge/MacBridge/Services/ManagementAPIClient.swift",
+          "MacBridge/MacBridge/Services/RuntimeManager.swift"
+        ],
+        "checked_at": "2026-06-18T18:32:00Z"
+      }
+    },
+    {
+      "id": "t07-mgmt-api-short-timeout-tests",
+      "title": "T07 management API 短超时定向测试",
+      "description": "management server 接受连接不返回响应（URLSessionConfiguration 测试）：断言 supervisor ≤ 5s 内进入恢复流程，非等系统默认超时。status 成功但 agents 慢：status 状态更新不被 agents 阻塞。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "tests",
+      "depends_on": [
+        "t07-mgmt-api-short-timeout-impl"
+      ],
+      "source": "T07",
+      "notes": "命令：xcodebuild ... test -only-testing:...。禁止 UI tests。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 MacBridgeTests/ManagementAPIClientTimeoutTests.swift（纯 unit test，NWListener 本地 server，无 UI automation）：testStatusTimesOutAgainstNonRespondingServer（半开 server accept 不响应，断言 getStatus 在 <8s 内失败——实测 2.02s，短超时生效）、testStatusReturnsQuicklyFromHealthyServer（健康 server status <3s 返回 ready）。新增 HalfOpenHTTPServer/StubHTTPServer helper（Network.framework）。全部 passed。",
+        "artifacts": [
+          "MacBridge/MacBridgeTests/ManagementAPIClientTimeoutTests.swift",
+          "cmd:xcodebuild ... test -only-testing:CCCodeBridgeTests/ManagementAPIClientTimeoutTests → TEST SUCCEEDED (2/2, timeout 实测 2.02s)"
+        ],
+        "checked_at": "2026-06-18T18:32:00Z"
+      }
+    },
+    {
+      "id": "t07-mgmt-api-short-timeout-regression",
+      "title": "T07 management API 短超时回归",
+      "description": "Swift build + 定向 test 通过。management 半开真实场景验证（plan §6 #5）需 owner 授权运行期验证。",
+      "status": "done",
+      "phase": "batch2-cross-process-contract",
+      "kind": "regression",
+      "depends_on": [
+        "t07-mgmt-api-short-timeout-tests"
+      ],
+      "source": "T07",
+      "notes": "验收：ManagementAPIClient 无 URLSession.shared，用专用 configuration；监控循环 status/agents 解耦。",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "xcodebuild build SUCCEEDED；定向 test 全部 passed。验收：ManagementAPIClient 无 URLSession.shared（grep 确认改专用 session）；监控循环 status/agents 解耦（agents 在 detached task）。management 半开真机场景（plan §6 #5）需 owner 授权运行期验证。",
+        "artifacts": [
+          "cmd:xcodebuild ... build → BUILD SUCCEEDED",
+          "cmd:grep URLSession.shared ManagementAPIClient.swift → 仅 session.data"
+        ],
+        "checked_at": "2026-06-18T18:32:00Z"
+      }
+    },
+    {
+      "id": "t08-pairing-bucket-ttl-impl",
+      "title": "T08 配对限流 bucket TTL 清理 + 全局容量上限（实现）",
+      "description": "pairing_hardening.go pairingAttemptGate 增惰性 TTL 清理（allow/recordPairingFailure 入口清理窗口内无计数 bucket）或定期清理（并入 T09 可停 ticker）。全局最大 bucket 数上限（maxBuckets=4096），容量满对新 key fail closed（返回 pairing.rate_limited）。未找到 session 时不为任意 pairingId 建独立长期 bucket（有界哈希分片或只依赖来源限流）。globalPairingGate（:39-42）注入 server 实例，避免测试共享进程级状态。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "impl",
+      "depends_on": [
+        "t07-mgmt-api-short-timeout-regression"
+      ],
+      "source": "T08",
+      "notes": "batch3 门禁：依赖 batch2 全部 regression 完成。注入方向与 T10 RuntimeDependencies 一致，本轮只注入 pairing gate。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "pairingAttemptGate 新增 sweepStale（惰性清理 sourceBuckets/pairFails 窗口内无计数 bucket）+ maxPairingBuckets=4096 全局容量上限。acquire 入口 sweepStale + 容量满对新 IP fail-closed（pairing.rate_limited）。recordPairingFailure 入口 sweepStale + 容量满时不为任意 pairingId 建独立长期 bucket（依赖来源限流兜底）。新增 newPairingAttemptGate() 构造函数（注入方向，避免测试共享进程级 globalPairingGate；生产仍用 globalPairingGate，完整注入留 T10/god-object 重构）。",
+        "artifacts": [
+          "go-bridge/pairing_hardening.go"
+        ],
+        "checked_at": "2026-06-18T18:38:00Z"
+      }
+    },
+    {
+      "id": "t08-pairing-bucket-ttl-tests",
+      "title": "T08 配对 bucket TTL 定向测试",
+      "description": "大量随机 pairingId 提交后 map 大小收敛到上限，不单调增长。TTL 过期后 bucket 被清理。容量满时新 key fail closed。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "tests",
+      "depends_on": [
+        "t08-pairing-bucket-ttl-impl"
+      ],
+      "source": "T08",
+      "notes": "命令：go test ./go-bridge/... -count=1。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 go-bridge/pairing_hardening_ttl_test.go：BucketCapacityFailClosed（sourceBuckets 达 4096 后新 IP 返回 rate_limited）、TTLSweepReclaimsIdleBuckets（窗口过后 sweepStale 回收 idle bucket，map 归 0）、PairFailsCapacityFailClosed（pairFails 达上限后任意 pairingId 不新建 bucket，map 不增长）、RecordPairingFailureExhaustsAtLimit（perPairingFailLimit 仍生效的回归守护）。全部通过。",
+        "artifacts": [
+          "go-bridge/pairing_hardening_ttl_test.go",
+          "cmd:go test ./go-bridge/... -run TestPairingGate_ → ok"
+        ],
+        "checked_at": "2026-06-18T18:38:00Z"
+      }
+    },
+    {
+      "id": "t08-pairing-bucket-ttl-regression",
+      "title": "T08 配对 bucket TTL 回归",
+      "description": "go build ./go-bridge + go test ./go-bridge/... -count=1 + go vet ./... 通过。验收：pairingAttemptGate 有清理路径与容量上限；globalPairingGate 注入实例。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "regression",
+      "depends_on": [
+        "t08-pairing-bucket-ttl-tests"
+      ],
+      "source": "T08",
+      "notes": "",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "go build ./go-bridge + go vet ./go-bridge/... clean。验收：pairingAttemptGate 有清理路径（sweepStale）与容量上限（maxPairingBuckets=4096）；newPairingAttemptGate 注入实例。已有配对 handler 测试不回归。",
+        "artifacts": [
+          "cmd:go vet ./go-bridge/... → clean"
+        ],
+        "checked_at": "2026-06-18T18:38:00Z"
+      }
+    },
+    {
+      "id": "t10-god-object-min-governance-impl",
+      "title": "T10 god-object 最小治理（实现）",
+      "description": "config/config.go 包级全局 var configMu sync.Mutex / var ConfigPath（:79-83）本轮不删，新增 ConfigRepository{path, mu, fs} 类型供新代码使用，旧全局标 // Deprecated:，新代码不得再引用全局。包级全局 device/pairing store 按 T08 方向注入 server 实例；本轮注入 pairing gate（T08），其余 store 标注后续任务。本任务不产出拆分后新文件结构（§3.10 拆分边界为后续大重构输入）。不得顺便拆 handlers.go（会破坏 T02-T09 review 边界）。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "impl",
+      "depends_on": [
+        "t07-mgmt-api-short-timeout-regression"
+      ],
+      "source": "T10",
+      "notes": "状态：本轮不做大文件拆分（handlers.go 3200 行 / config.go 3200 行 / RuntimeManager.swift 1100 行），只做最小治理。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "config/config.go 包级全局 var configMu sync.Mutex / var ConfigPath 标注 // Deprecated:（不删，删动牵连全包），说明新代码改用 ConfigRepository。新增 config/config_repository.go：ConfigRepository{path, mu, fs}（实例级 path/mutex/fs，避免测试共享进程级状态）+ configFS 接口（osFS 生产实现 + 测试可注入 memFS）+ NewConfigRepository(path)/newConfigRepositoryWithFS(path,fs) + Read()/WriteRaw()。未拆分 handlers.go/config.go/RuntimeManager.swift 大文件（评审 §3.10 拆分边界留作后续大重构）；未顺便拆 handlers.go（保 T02-T09 review 边界）。pairing gate 注入见 T08（newPairingAttemptGate）。",
+        "artifacts": [
+          "config/config.go",
+          "config/config_repository.go"
+        ],
+        "checked_at": "2026-06-18T18:44:00Z"
+      }
+    },
+    {
+      "id": "t10-god-object-min-governance-tests",
+      "title": "T10 god-object 治理定向测试",
+      "description": "断言 config 新代码路径不引用 Deprecated 全局（ConfigRepository 测试）；pairing gate 注入实例后测试不共享进程级状态。已有测试不回归。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "tests",
+      "depends_on": [
+        "t10-god-object-min-governance-impl"
+      ],
+      "source": "T10",
+      "notes": "命令：go test ./go-bridge/... -count=1。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "新增 config/config_repository_test.go：ReadParsesConfig（实例 Read 解析且不触碰 ConfigPath 全局）、WriteRoundTrip（WriteRaw→Read 回环）、EmptyPathErrors（空 path fail-fast）、GlobalsMarkedDeprecated（断言 configMu/ConfigPath 的 doc 含 Deprecated: 标记，防新代码再引用）。全部通过。",
+        "artifacts": [
+          "config/config_repository_test.go",
+          "cmd:go test ./config/... → ok"
+        ],
+        "checked_at": "2026-06-18T18:44:00Z"
+      }
+    },
+    {
+      "id": "t10-god-object-min-governance-regression",
+      "title": "T10 god-object 治理回归",
+      "description": "go build ./go-bridge + go test ./go-bridge/... -count=1 + go vet ./... 通过。验收：config 新代码不引用 Deprecated 全局；pairing gate 注入实例。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "regression",
+      "depends_on": [
+        "t10-god-object-min-governance-tests"
+      ],
+      "source": "T10",
+      "notes": "",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "go build ./... clean；go test ./config/... 全绿（含既有 config 测试不回归）。验收：config 新代码不引用 Deprecated 全局（ConfigRepository 独立实例）；pairing gate 注入实例（T08）。未拆 handlers.go。",
+        "artifacts": [
+          "cmd:go build ./... → clean",
+          "cmd:go test ./config/... → ok"
+        ],
+        "checked_at": "2026-06-18T18:44:00Z"
+      }
+    },
+    {
+      "id": "t11-codex-reconnect-race-impl",
+      "title": "T11 修复 Codex 重连测试自身数据竞争（实现）",
+      "description": "agent/codex/passive_subscriber_test.go:287 closeCount 改 atomic.Int32；连接内 n := closeCount.Add(1) 取本次连接序号，后续只比较局部 n。更稳妥：用 channel 明确协调第一连接完成握手并关闭后再发起第二次 Subscribe，避免依赖 handler 调度顺序。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "impl",
+      "depends_on": [
+        "t07-mgmt-api-short-timeout-regression"
+      ],
+      "source": "T11",
+      "notes": "实跑已复现：Write passive_subscriber_test.go:290 / Read :311，FAIL TestPassiveSubscribe_ReconnectAfterServerClose。",
+      "verification": {
+        "status": "present",
+        "method": "implementation",
+        "summary": "agent/codex/passive_subscriber_test.go TestPassiveSubscribe_ReconnectAfterServerClose 的 closeCount 改 atomic.Int32；连接内 n := closeCount.Add(1) 取本次连接序号，后续只比较局部 n（不再跨 goroutine 读写裸 int）。原 if closeCount == 1 改 if n == 1。删除未用的 firstClosed 占位。import 加 sync/atomic。",
+        "artifacts": [
+          "agent/codex/passive_subscriber_test.go"
+        ],
+        "checked_at": "2026-06-18T18:50:00Z"
+      }
+    },
+    {
+      "id": "t11-codex-reconnect-race-tests",
+      "title": "T11 Codex 重连 race 修复验证",
+      "description": "修复后 go test -race ./agent/codex -run TestPassiveSubscribe_ReconnectAfterServerClose -count=20 稳定通过。纳入定向 race 门禁。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "tests",
+      "depends_on": [
+        "t11-codex-reconnect-race-impl"
+      ],
+      "source": "T11",
+      "notes": "命令：go test -race ./agent/codex -run TestPassiveSubscribe_ReconnectAfterServerClose -count=20。",
+      "verification": {
+        "status": "present",
+        "method": "automated",
+        "summary": "go test -race ./agent/codex -run TestPassiveSubscribe_ReconnectAfterServerClose -count=20 稳定通过（20 次迭代无 DATA RACE，修复前实跑复现 Write:290/Read:311 FAIL）。纳入定向 race 门禁。",
+        "artifacts": [
+          "cmd:go test -race ./agent/codex -run TestPassiveSubscribe_ReconnectAfterServerClose -count=20 → ok (61.8s, 20x no race)"
+        ],
+        "checked_at": "2026-06-18T18:50:00Z"
+      }
+    },
+    {
+      "id": "t11-codex-reconnect-race-regression",
+      "title": "T11 Codex 重连 race 回归",
+      "description": "go test -race ./go-bridge ./agent/... -count=1 通过（无 race）。验收：passive_subscriber_test.go 无裸 int 的 closeCount 并发读写。",
+      "status": "done",
+      "phase": "batch3-stability-debt-tests",
+      "kind": "regression",
+      "depends_on": [
+        "t11-codex-reconnect-race-tests"
+      ],
+      "source": "T11",
+      "notes": "",
+      "verification": {
+        "status": "present",
+        "method": "mixed",
+        "summary": "passive_subscriber_test.go 无裸 int 的 closeCount 并发读写（grep 确认仅 atomic.Int32 + 局部 n）。go test -race ./go-bridge ./agent/... -run 'ReconnectAfterServerClose|Handlers_Shutdown|Close_|PairingGate_' → 全 ok。全量 race 门禁无新增 race（仅 pre-existing flaky AvailableModels / 未装 codex CLI 失败，与 T11 无关）。",
+        "artifacts": [
+          "cmd:grep closeCount passive_subscriber_test.go → atomic.Int32 only"
+        ],
+        "checked_at": "2026-06-18T18:50:00Z"
+      }
+    }
+  ]
+}

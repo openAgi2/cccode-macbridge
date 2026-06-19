@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -66,6 +67,88 @@ type Server struct {
 type socketPeer struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
+
+	// Per-device bounded send queue + dedicated writer goroutine. A slow device
+	// no longer blocks the bridge read loop (which previously called
+	// target.write synchronously, stalling all devices on the same route). The
+	// read loop now does a non-blocking enqueue; when the queue is full the
+	// device is disconnected (current envelope falls through to mailbox so it
+	// is not lost).
+	sendCh    chan []byte
+	done      chan struct{}
+	queueBytes int64 // atomic — bytes currently queued, for backpressure + metrics
+	drops     int64  // atomic — count of frames dropped due to full queue
+	startOnce sync.Once
+	stopOnce  sync.Once
+}
+
+// Per-device bounded send queue limits. Either bound triggers disconnect of
+// the slow device (the bridge read loop falls back to mailbox for the frame
+// that overflowed). Tuned so a healthy device never trips them; only a
+// genuinely stuck receiver (full TCP window) does.
+const (
+	perDeviceSendQueueFrames = 256      // single device send-queue frame cap
+	perDeviceSendQueueBytes  = 8 << 20  // 8 MiB byte cap; whichever hits first disconnects
+)
+
+// startWriter launches the per-peer writer goroutine exactly once. Frames
+// enqueued via enqueue are written serially under writeMu. The goroutine exits
+// when sendCh is closed (via shutdownWriter) or done is closed.
+func (p *socketPeer) startWriter() {
+	p.startOnce.Do(func() {
+		go p.writeLoop()
+	})
+}
+
+func (p *socketPeer) writeLoop() {
+	for {
+		select {
+		case payload, ok := <-p.sendCh:
+			if !ok {
+				return
+			}
+			atomic.AddInt64(&p.queueBytes, -int64(len(payload)))
+			if err := p.write(payload); err != nil {
+				// Writer error (peer gone / write deadline): stop draining. The
+				// read loop's removeDevice/closePeer path tears down the conn.
+				return
+			}
+		case <-p.done:
+			return
+		}
+	}
+}
+
+// shutdownWriter closes the send channel and done, idempotently. After this,
+// the writer goroutine exits. Callers must ensure no further enqueue happens.
+func (p *socketPeer) shutdownWriter() {
+	p.stopOnce.Do(func() {
+		close(p.done)
+	})
+}
+
+// enqueue attempts a non-blocking send to the device's queue. Returns true if
+// accepted, false if the queue is full (caller should disconnect the device and
+// fall back to mailbox). Enforcing both frame-count and byte-count bounds here
+// guarantees the queue can't grow unbounded.
+func (p *socketPeer) enqueue(payload []byte) bool {
+	if p.sendCh == nil {
+		// Peer not queue-enabled (e.g. a bridge peer); fall back to sync write.
+		return p.write(payload) == nil
+	}
+	// Byte bound check before enqueue (frames-count bound enforced by chan cap).
+	if atomic.LoadInt64(&p.queueBytes)+int64(len(payload)) > perDeviceSendQueueBytes {
+		atomic.AddInt64(&p.drops, 1)
+		return false
+	}
+	select {
+	case p.sendCh <- payload:
+		atomic.AddInt64(&p.queueBytes, int64(len(payload)))
+		return true
+	default:
+		atomic.AddInt64(&p.drops, 1)
+		return false
+	}
 }
 
 type envelopeHeader struct {
@@ -511,9 +594,21 @@ func (s *Server) handleDeviceSocket(w http.ResponseWriter, r *http.Request, rout
 		return http.StatusBadRequest
 	}
 	conn.SetReadLimit(s.config.MaxFrameBytes)
-	peer := &socketPeer{conn: conn}
+	// Device peer gets a bounded send queue + writer goroutine so a slow
+	// device cannot block the bridge read loop's delivery to other devices on
+	// the same route (head-of-line blocking). The bridge peer stays sync-write
+	// (there is exactly one bridge per route; no cross-device blocking).
+	peer := &socketPeer{
+		conn:    conn,
+		sendCh:  make(chan []byte, perDeviceSendQueueFrames),
+		done:    make(chan struct{}),
+	}
+	peer.startWriter()
+	defer func() {
+		peer.shutdownWriter()
+		s.removeDevice(routeID, deviceID, peer)
+	}()
 	s.setDevice(routeID, deviceID, peer)
-	defer s.removeDevice(routeID, deviceID, peer)
 	s.readDeviceFrames(r.Context(), routeID, deviceID, peer)
 	return http.StatusSwitchingProtocols
 }
@@ -530,15 +625,20 @@ func (s *Server) readBridgeFrames(ctx context.Context, routeID string, peer *soc
 			return
 		}
 
-		// 握手响应不是 envelope 格式，但仍必须只发给目标 device。
+		// 握手响应不是 envelope 格式，但仍必须只发给目标 device。非阻塞 enqueue：
+		// 慢 device 不阻塞同 route 其他 device（消除队头阻塞）。enqueue 满则断开该 device。
 		var hs handshakeHeader
 		if json.Unmarshal(payload, &hs) == nil && isBridgeHandshakeResponse(hs.Type) &&
 			validID(hs.DeviceID) && s.store.DeviceActive(ctx, routeID, hs.DeviceID) {
 			if target := s.device(routeID, hs.DeviceID); target != nil {
-				if err := target.write(payload); err == nil {
+				if target.enqueue(payload) {
 					continue
 				}
+				// Queue full → disconnect slow device; handshake response is not
+				// mailbox-eligible (it is connection-scoped), so just drop after disconnect.
+				s.logger.Warn("relay device send queue full, disconnecting", "route", safeID(routeID), "device", safeID(hs.DeviceID), "op", "handshake")
 				s.removeDevice(routeID, hs.DeviceID, target)
+				s.closePeer(target, websocket.CloseTryAgainLater, "send queue full")
 			}
 			continue
 		}
@@ -548,12 +648,19 @@ func (s *Server) readBridgeFrames(ctx context.Context, routeID string, peer *soc
 			s.closePeer(peer, websocket.ClosePolicyViolation, "invalid relay envelope")
 			return
 		}
+		// 在线投递（非 mailbox 帧）：非阻塞 enqueue。成功即 continue（不重复入 mailbox，
+		// 保证在线写成功与 mailbox 幂等）。enqueue 失败（队列满→断开）或 device 不在线
+		// 才落入 mailbox，device 重连后补投。
 		if !strings.HasPrefix(envelope.KeyEpochID, "mailbox:") {
 			if target := s.device(routeID, envelope.DestinationID); target != nil {
-				if err := target.write(payload); err == nil {
+				if target.enqueue(payload) {
 					continue
 				}
+				// Queue full: disconnect the slow device and let this frame fall
+				// through to mailbox so it is not lost (B reconnects → receives it).
+				s.logger.Warn("relay device send queue full, disconnecting", "route", safeID(routeID), "device", safeID(envelope.DestinationID), "drops", atomic.LoadInt64(&target.drops))
 				s.removeDevice(routeID, envelope.DestinationID, target)
+				s.closePeer(target, websocket.CloseTryAgainLater, "send queue full")
 			}
 		}
 		if _, evicted, err := s.store.AppendFrame(ctx, routeID, envelope.DestinationID, payload, time.Now(), s.config.MailboxTTL, s.config.MaxMailboxBytes); err != nil {

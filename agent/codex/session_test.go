@@ -233,7 +233,7 @@ func TestSend_WithImages_PassesImageArgsAndDefaultPrompt(t *testing.T) {
 	t.Setenv("CODEX_ARGS_FILE", argsFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "", "", nil, "")
+	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "", "", testControlEnv(), "")
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestSend_ResumeWithImages_PlacesSessionBeforeImageFlags(t *testing.T) {
 	t.Setenv("CODEX_ARGS_FILE", argsFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "thread-123", "", nil, "")
+	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "thread-123", "", testControlEnv(), "")
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestSend_UsesStdinForMultilinePrompt(t *testing.T) {
 	t.Setenv("CODEX_STDIN_FILE", stdinFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "thread-stdin", "", nil, "")
+	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "thread-stdin", "", testControlEnv(), "")
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestSend_HandlesLargeJSONLines(t *testing.T) {
 	t.Setenv("CODEX_PAYLOAD_FILE", payloadFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "", "", nil, "")
+	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "", "", testControlEnv(), "")
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestClose_ForceKillsAllTrackedProcessesAfterCmdOverwrite(t *testing.T) {
 		codexSessionForceKillWait = oldForceKillWait
 	})
 
-	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "", "", nil, "")
+	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "", "", testControlEnv(), "")
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -733,4 +733,25 @@ func waitForFileLines(t *testing.T, path string, want int) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d lines in %s", want, path)
+}
+
+// testControlEnv returns the CODEX_* control variables that the fake codex
+// scripts read (args/stdin/payload/starts files). They are normally set on the
+// test process via t.Setenv, but core.BuildAgentEnv now seeds the agent
+// subprocess from a minimal runtime allowlist instead of raw os.Environ(), so
+// these test-only control vars must be explicitly passed via extraEnv to reach
+// the child. Production provider/session env flows through extraEnv the same way.
+func testControlEnv() []string {
+	var env []string
+	for _, k := range []string{
+		"CODEX_ARGS_FILE",
+		"CODEX_STDIN_FILE",
+		"CODEX_PAYLOAD_FILE",
+		"CODEX_STARTS_FILE",
+	} {
+		if v := os.Getenv(k); v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }

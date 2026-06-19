@@ -132,6 +132,18 @@ class RuntimeManager: ObservableObject {
     /// 最近一次 launchBridgeProcess 启动的 PID，用于区分旧进程退出和新进程退出
     private var lastLaunchedPID: Int32 = 0
     private var crashCount = 0
+    /// T05: 当前挂起的延迟 restart Task。新 restart 到来时先 cancel 旧 Task，保证 100ms 内
+    /// 连续多次 restart 只启动一次进程（避免端口反复接管 / session 丢失 / ready frame 抖动）。
+    private var restartTask: Task<Void, Never>?
+    /// T05: 单调递增的 launch generation。每次 restart() 自增并捕获局部 gen；延迟 Task 醒来后
+    /// 必须验证 gen == launchGeneration，否则直接 return（旧 Task 被新 restart 取代）。
+    private var launchGeneration: Int = 0
+    /// T05(test): launchBridgeProcess 真正进入执行的次数（跳过重入守卫的 return 之后才计）。
+    /// 仅用于单元测试观测 restart 收敛行为，生产代码不读。
+    internal var launchCount: Int = 0
+    /// T06: 当前 launch 对应的 bridgeEpoch（从 runtime.json 首次读到时锁定）。后续轮询必须匹配
+    /// 同一 epoch，防同 PID 生命周期外的旧 runtime.json 误判（PID 复用 / 残留文件）。
+    private var currentBridgeEpoch: String?
     private let maxCrashRetries = 3
     private var logFileHandle: FileHandle?
     /// Mac 休眠期间为 true，阻止 crash 重试
@@ -189,14 +201,31 @@ class RuntimeManager: ObservableObject {
         // 在 launchBridgeProcess 之前才重置为 false。
         userStopped = true
         crashCount = 0
+        // T05: 自增 generation 并 cancel 任何挂起的延迟 restart Task。
+        // 100ms 内连续多次 restart：旧 Task 被 cancel，只有最新 generation 的 Task 会真正 launch。
+        launchGeneration += 1
+        let gen = launchGeneration
+        restartTask?.cancel()
         terminateProcess()
         setStatus(.starting, "正在重启 Bridge...")
         // 短暂延迟让端口释放、旧 pipe 清理、terminationHandler Task 执行完毕
-        Task {
+        restartTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self else { return }
+            // 醒来后必须同时校验 generation 与 cancel 状态：若期间又有新 restart 到来，
+            // gen 已过期或 Task 被 cancel，直接 return 不 launch（收敛重复 restart）。
+            guard gen == self.launchGeneration, !Task.isCancelled else { return }
             self.userStopped = false
             self.launchBridgeProcess()
         }
+    }
+
+    /// T05: 原子改 config 后只调度一次 restart。配置更新路径（remoteURL 变更、Relay provisioning
+    /// 回调）应改用此方法合并所有字段变更，再只 restart 一次——避免连续双 restart 导致端口
+    /// 反复接管与 ready frame 抖动。
+    func applyConfigAndRestart(_ apply: (inout RuntimeConfig) -> Void) {
+        apply(&config)
+        restart()
     }
 
     /// 更新 OpenCode 认证凭据（下次启动时生效）
@@ -216,6 +245,12 @@ class RuntimeManager: ObservableObject {
     // MARK: - 进程管理
 
     private func launchBridgeProcess() {
+        // T05: 重入守卫——若已有当前 generation 的进程正在 starting/running，直接 return，
+        // 防止 cancel 竞态或重复调用导致同 generation 多次 launch。
+        if bridgeProcess != nil && lastLaunchedPID != 0 {
+            // 进程仍可能存活或正在退出；交由 terminationHandler 处理，不重复 launch。
+            if let proc = bridgeProcess, proc.isRunning { return }
+        }
         // 确保目录存在
         // P2-8: data/log 目录创建后收紧为 0700（仅 owner 可访问）。
         try? FileManager.default.createDirectory(atPath: config.dataDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -226,6 +261,9 @@ class RuntimeManager: ObservableObject {
         configureOpenCodeDesktopServerIfNeeded()
         guard prepareRuntimeOwnershipForLaunch() else { return }
 
+        launchCount += 1
+        // T06: 每次 launch 重置 epoch 锁定，新进程的 runtime.json 首次读到时重新锁定。
+        currentBridgeEpoch = nil
         // management token
         let token = ensureManagementToken()
 
@@ -447,10 +485,20 @@ class RuntimeManager: ObservableObject {
 
         // 必需字段就位后再判断 managementUrl：port/pid/token 都匹配但 managementUrl 缺失，
         // 属致命启动契约违例（P1-6）。不能静默卡在 starting 反复轮询，必须显式报错。
+        // T06: 同时校验 bridgeEpoch——同一 launch 内 epoch 必须稳定，防止残留 runtime.json
+        // （同 PID 复用 / 旧文件）被误判为新进程就绪。
         guard let frame = bootstrap.frame,
               frame.port == config.port,
               expectedPID == nil || frame.pid == Int(expectedPID ?? 0) else {
             return
+        }
+        if let epoch = frame.epoch {
+            if currentBridgeEpoch == nil {
+                currentBridgeEpoch = epoch
+            } else if currentBridgeEpoch != epoch {
+                // epoch 变化但未经过 launchBridgeProcess：拒绝，等下一轮重新锁定。
+                return
+            }
         }
         guard let token = bootstrap.token, !token.isEmpty else {
             return
@@ -476,15 +524,33 @@ class RuntimeManager: ObservableObject {
 
         guard let client = apiClient else { return }
 
+        // T07: status 决定 liveness——成功即立即更新状态；agents 刷新独立低优先级执行，
+        // 不阻塞 status 轮询周期（pre-fix 串行 await getAgents 在 status 后，慢响应卡住整个 3s 轮询）。
+        // 捕获本 polling 轮的 generation/PID，旧请求返回后不得覆盖新 runtime 状态。
+        let pollGeneration = launchGeneration
+        let pollPID = lastLaunchedPID
         do {
             let resp = try await client.getStatus()
+            // T07: 旧请求返回后，若期间已 restart（generation 变或 PID 变），丢弃结果。
+            guard pollGeneration == launchGeneration, pollPID == lastLaunchedPID else { return }
             applyManagementStatus(resp.status)
             managementFailureCount = 0
-            let latestAgents = (try? await client.getAgents()) ?? []
-            if agents != latestAgents {
-                agents = latestAgents
+            // agents 刷新独立低优先级 task，不阻塞本轮 status 轮询与自动重启判定。
+            Task.detached(priority: .utility) { [weak self, weak client] in
+                guard let client else { return }
+                let latestAgents = (try? await client.getAgents()) ?? []
+                await MainActor.run {
+                    guard let self else { return }
+                    // 同样校验 generation/PID，防止旧 agents 覆盖新 runtime。
+                    guard pollGeneration == self.launchGeneration, pollPID == self.lastLaunchedPID else { return }
+                    if self.agents != latestAgents {
+                        self.agents = latestAgents
+                    }
+                }
             }
         } catch {
+            // T07: 失败也需校验 generation/PID，避免旧失败覆盖新 runtime 状态。
+            guard pollGeneration == launchGeneration, pollPID == lastLaunchedPID else { return }
             managementFailureCount += 1
             if managementFailureCount >= 3, status == .ready || status == .readyNoAgents {
                 setStatus(.starting, "Bridge 管理接口暂不可用，正在重新检测...")
@@ -670,13 +736,14 @@ class RuntimeManager: ObservableObject {
         )
     }
 
-    private nonisolated static func readRuntimeJSON(in dataDir: String) -> (managementUrl: String?, port: Int?, pid: Int?)? {
+    private nonisolated static func readRuntimeJSON(in dataDir: String) -> (managementUrl: String?, port: Int?, pid: Int?, epoch: String?)? {
         let path = dataDir + "/runtime.json"
         guard let data = FileManager.default.contents(atPath: path),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        return (json["managementUrl"] as? String, json["port"] as? Int, json["pid"] as? Int)
+        // T06: 同时读取 bridgeEpoch 用于交叉校验，防同 PID 生命周期外的旧 runtime.json 误判。
+        return (json["managementUrl"] as? String, json["port"] as? Int, json["pid"] as? Int, json["bridgeEpoch"] as? String)
     }
 
     private nonisolated static func readPersistedToken(in dataDir: String) -> String? {

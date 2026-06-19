@@ -2,6 +2,8 @@ package gobridge
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -121,6 +123,7 @@ func TestErrorCodeConstants(t *testing.T) {
 		{RuntimeErrorConfigInvalid, "runtime_error.config_invalid"},
 		{RuntimeErrorManagementBindFailed, "runtime.management_bind_failed"},
 		{RuntimeErrorManagementURLMissing, "runtime.management_url_missing"},
+		{RuntimeErrorBootstrapPersistFailed, "runtime_error.bootstrap_persist_failed"},
 	}
 	for _, tt := range tests {
 		if tt.constant != tt.want {
@@ -149,5 +152,73 @@ func TestReadyFrameContainsCorrectFields(t *testing.T) {
 	}
 	if !strings.Contains(s, `"bridgeEpoch":"abc"`) {
 		t.Errorf("JSON missing bridgeEpoch: %s", s)
+	}
+}
+
+// TestWriteReadyFrame_ReturnsErrorOnUnwritableDataDir verifies the T06 contract:
+// WriteReadyFrame returns a non-nil error when runtime.json cannot be written
+// (read-only dataDir). Pre-fix it only slog.Error'd and returned silently,
+// letting the bridge publish ready against an unwritten runtime.json.
+func TestWriteReadyFrame_ReturnsErrorOnUnwritableDataDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses file permissions; cannot simulate read-only dir")
+	}
+	dataDir := t.TempDir()
+	// Make the directory read-only (0500): AtomicWriteFile's temp-rename needs
+	// write permission, which will fail.
+	if err := os.Chmod(dataDir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o755) })
+
+	err := WriteReadyFrame(8777, []string{"claude"}, "http://127.0.0.1:9999", dataDir)
+	if err == nil {
+		t.Fatal("WriteReadyFrame returned nil error for unwritable dataDir; expected fail-fast error")
+	}
+
+	// runtime.json must NOT exist — the atomic write failed, no partial/stale
+	// ready file is left for the Mac App to misread.
+	if _, statErr := os.Stat(filepath.Join(dataDir, "runtime.json")); statErr == nil {
+		t.Fatal("runtime.json exists after failed write — partial/stale ready frame must not persist")
+	}
+}
+
+// TestWriteReadyFrame_SuccessWritesRuntimeJSONWithEpoch verifies the happy path
+// writes runtime.json with bridgeEpoch present (T06: epoch in the file for Swift
+// cross-validation).
+func TestWriteReadyFrame_SuccessWritesRuntimeJSONWithEpoch(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := WriteReadyFrame(8777, []string{"claude", "codex"}, "http://127.0.0.1:9999", dataDir); err != nil {
+		t.Fatalf("WriteReadyFrame error on writable dataDir: %v", err)
+	}
+
+	runtimePath := filepath.Join(dataDir, "runtime.json")
+	data, err := os.ReadFile(runtimePath)
+	if err != nil {
+		t.Fatalf("read runtime.json: %v", err)
+	}
+	var frame RuntimeReadyFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
+		t.Fatalf("unmarshal runtime.json: %v", err)
+	}
+	if frame.Type != "runtime_ready" {
+		t.Errorf("type = %q, want runtime_ready", frame.Type)
+	}
+	if frame.BridgeEpoch == "" {
+		t.Error("BridgeEpoch empty — T06 requires epoch for Swift cross-validation")
+	}
+	if frame.Port != 8777 {
+		t.Errorf("port = %d, want 8777", frame.Port)
+	}
+	if frame.PID != os.Getpid() {
+		t.Errorf("pid = %d, want %d", frame.PID, os.Getpid())
+	}
+}
+
+// TestWriteReadyFrame_EmptyDataDirNoError verifies empty dataDirPath (dev mode)
+// does not error — only product mode persists.
+func TestWriteReadyFrame_EmptyDataDirNoError(t *testing.T) {
+	if err := WriteReadyFrame(8777, []string{"claude"}, "", ""); err != nil {
+		t.Fatalf("WriteReadyFrame with empty dataDir returned error: %v", err)
 	}
 }

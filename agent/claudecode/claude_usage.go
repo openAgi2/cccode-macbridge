@@ -75,12 +75,13 @@ func (a *Agent) runClaudeUsageProbe(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(probeCtx, "claude", args...)
 	cmd.Dir = workDir
 
-	env := filterEnv(os.Environ(), "CLAUDECODE")
-	env = append(env, "DISABLE_TELEMETRY=true")
-	env = append(env, "DISABLE_COST_WARNINGS=true")
-	if extra := a.usageProbeEnv(); len(extra) > 0 {
-		env = core.MergeEnv(env, extra)
-	}
+	// Probe is still a real claude subprocess: use the same controlled env as
+	// a full session so CCCODE_* / CLAUDECODE can't leak into it.
+	env := core.BuildAgentEnv(
+		core.FilterEnvToAllowlist(os.Environ(), core.AgentEnvRuntimeAllowlist()),
+		a.usageProbeEnv(),
+		[]string{"DISABLE_TELEMETRY=true", "DISABLE_COST_WARNINGS=true"},
+	)
 	cmd.Env = env
 
 	var stderr bytes.Buffer

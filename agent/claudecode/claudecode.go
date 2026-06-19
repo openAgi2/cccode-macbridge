@@ -1095,6 +1095,10 @@ func extractTextContent(raw json.RawMessage) string {
 	return strings.Join(segments, "\n\n")
 }
 
+// Stop is a no-op for now. Per-session Close() already reaps each CLI's process
+// group on shutdown (Handlers.Shutdown → AgentSession.Close). Agent-wide stop
+// (stopping background usage probes / passive subscriptions) is not yet wired.
+// TODO: process-group stop at the Agent level.
 func (a *Agent) Stop() error { return nil }
 
 // SetMode changes the permission mode for future sessions.

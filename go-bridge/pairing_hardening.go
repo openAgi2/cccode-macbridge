@@ -32,7 +32,7 @@ type pairingAttemptGate struct {
 	mu sync.Mutex
 
 	sourceBuckets map[string]*slidingBucket // key = source IP
-	pairFails     map[string]*slidingBucket  // key = pairingId
+	pairFails     map[string]*slidingBucket // key = pairingId
 	activeClaims  int
 }
 
@@ -40,6 +40,19 @@ var globalPairingGate = &pairingAttemptGate{
 	sourceBuckets: make(map[string]*slidingBucket),
 	pairFails:     make(map[string]*slidingBucket),
 }
+
+// newPairingAttemptGate 构造一个独立的配对闸门实例（T08：注入方向，避免测试共享进程级
+// globalPairingGate 状态）。生产代码仍用 globalPairingGate；新代码/测试应通过实例注入。
+func newPairingAttemptGate() *pairingAttemptGate {
+	return &pairingAttemptGate{
+		sourceBuckets: make(map[string]*slidingBucket),
+		pairFails:     make(map[string]*slidingBucket),
+	}
+}
+
+// maxPairingBuckets 是单个 map（sourceBuckets / pairFails）的全局容量上限（T08）。
+// 超过后对新 key fail-closed（返回 rate_limited），防止任意 pairingId/IP 制造无界增长。
+const maxPairingBuckets = 4096
 
 type slidingBucket struct {
 	window time.Duration
@@ -67,20 +80,52 @@ func (b *slidingBucket) allow(now time.Time) (allowed bool, remaining int) {
 	return true, b.limit - len(b.counts)
 }
 
+// sweepStale 惰性清理 sourceBuckets 与 pairFails 中窗口内无计数的 bucket（T08 TTL 清理）。
+// 调用方必须持有 g.mu。
+func (g *pairingAttemptGate) sweepStale(now time.Time) {
+	sweep := func(buckets map[string]*slidingBucket) {
+		for k, b := range buckets {
+			cutoff := now.Add(-b.window)
+			fresh := b.counts[:0]
+			for _, s := range b.counts {
+				if s.at.After(cutoff) {
+					fresh = append(fresh, s)
+				}
+			}
+			if len(fresh) == 0 {
+				delete(buckets, k)
+			} else {
+				b.counts = fresh
+			}
+		}
+	}
+	sweep(g.sourceBuckets)
+	sweep(g.pairFails)
+}
+
 // acquire 检查来源 IP 限流与全局并发上限；进入 claim 流程时占用一个全局槽位。
 // 返回 nil 表示放行；返回非 nil PairingError 时应返回 pairing.rate_limited。
 // 调用方必须在流程结束后调用 release() 归还全局槽位。
+//
+// T08: 入口先惰性清理窗口内无计数的 bucket（防 sourceBuckets 无界增长），并对 source IP 达到
+// maxPairingBuckets 时对新 IP fail-closed（返回 rate_limited）。
 func (g *pairingAttemptGate) acquire(r *http.Request) *PairingError {
 	ip := pairingClientIP(r)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	now := time.Now()
+	g.sweepStale(now)
+
 	sb := g.sourceBuckets[ip]
 	if sb == nil {
+		// T08: 容量满时对新 key fail-closed，防任意 IP 制造无界 bucket。
+		if len(g.sourceBuckets) >= maxPairingBuckets {
+			return &PairingError{Code: "pairing.rate_limited", Message: "配对尝试过于频繁，请稍后再试"}
+		}
 		sb = &slidingBucket{window: pairingAttemptConfig.sourceIPWindow, limit: pairingAttemptConfig.sourceIPLimit}
 		g.sourceBuckets[ip] = sb
 	}
-	now := time.Now()
 	if ok, _ := sb.allow(now); !ok {
 		return &PairingError{Code: "pairing.rate_limited", Message: "配对尝试过于频繁，请稍后再试"}
 	}
@@ -102,11 +147,19 @@ func (g *pairingAttemptGate) release() {
 
 // recordPairingFailure 记录某 pairingId 的一次失败；连续失败超阈值返回 true（该 session 应失效）。
 // 返回值仅用于决定是否终止该 pairingId，不向调用方泄漏存在性（统一返回 invalid_code）。
+//
+// T08: 入口先惰性清理；pairFails 达 maxPairingBuckets 时不为任意 pairingId 建独立长期 bucket
+// （依赖来源限流兜底），避免任意 pairingId 制造无界增长。
 func (g *pairingAttemptGate) recordPairingFailure(pairingID string, now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.sweepStale(now)
 	b := g.pairFails[pairingID]
 	if b == nil {
+		// T08: 未找到 session 时不为任意 pairingId 建独立长期 bucket。
+		if len(g.pairFails) >= maxPairingBuckets {
+			return false
+		}
 		b = &slidingBucket{window: pairingAttemptConfig.perPairingFailWindow, limit: pairingAttemptConfig.perPairingFailLimit}
 		g.pairFails[pairingID] = b
 	}

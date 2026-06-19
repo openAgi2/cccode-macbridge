@@ -737,6 +737,12 @@ func (s *sseSubscriber) emit(ev core.Event) {
 }
 
 // Close 关闭 SSE 连接和事件 channel。
+//
+// INVARIANT: events is closed only after the producer (readLoop, tracked by
+// wg) has exited. The timeout branch never closes events directly — a producer
+// still running would panic on send (emit()'s default branch does NOT prevent a
+// closed-channel send panic). On timeout we defer the close to a goroutine that
+// waits for done.
 func (s *sseSubscriber) Close() error {
 	s.cancel()
 	s.closeOnce.Do(func() {
@@ -747,10 +753,14 @@ func (s *sseSubscriber) Close() error {
 		}()
 		select {
 		case <-done:
+			close(s.events)
 		case <-time.After(3 * time.Second):
-			slog.Debug("opencode SSE subscriber: close timeout")
+			slog.Debug("opencode SSE subscriber: close timeout, deferring events close until readLoop exits")
+			go func() {
+				<-done
+				close(s.events)
+			}()
 		}
-		close(s.events)
 	})
 	return nil
 }

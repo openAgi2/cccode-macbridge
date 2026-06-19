@@ -116,6 +116,10 @@ struct PairingSessionStatus: Codable {
 class ManagementAPIClient: OverviewAPIProviding, PairingAPIProviding {
     let baseURL: URL
     let token: String
+    /// T07: 专用 ephemeral URLSession，短请求/资源超时，防慢响应阻塞监控循环。
+    /// status 轮询 3s 一次，若 management server 半开（accept 连接不返回），URLSession.shared
+    /// 的默认超时会让 supervisor 卡住数十秒，期间不执行自动重启判定。
+    private let session: URLSession
 
     init(baseURL: String, token: String) throws {
         guard let url = URL(string: baseURL), !baseURL.isEmpty else {
@@ -123,6 +127,13 @@ class ManagementAPIClient: OverviewAPIProviding, PairingAPIProviding {
         }
         self.baseURL = url
         self.token = token
+        // T07: timeoutIntervalForRequest=2s（单请求），timeoutIntervalForResource=5s（整体含重试）。
+        // 这样慢/半开 management server 在 ≤5s 内让请求失败，supervisor 进入恢复流程而非卡死。
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 2
+        config.timeoutIntervalForResource = 5
+        config.waitsForConnectivity = false
+        self.session = URLSession(configuration: config)
     }
 
     private func request(_ path: String, method: String = "GET") -> URLRequest {
@@ -137,7 +148,7 @@ class ManagementAPIClient: OverviewAPIProviding, PairingAPIProviding {
     private func performRequest(_ path: String, method: String = "GET") async throws -> Data {
         var req = request(path, method: method)
         if method == "POST" { req.httpBody = Data() }
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             throw ManagementError.httpError(code)
@@ -156,9 +167,9 @@ class ManagementAPIClient: OverviewAPIProviding, PairingAPIProviding {
         req.httpBody = try JSONSerialization.data(
             withJSONObject: ["displayName": displayName]
         )
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else {
+            (200...299).contains(http.statusCode) else {
             throw ManagementError.httpError((response as? HTTPURLResponse)?.statusCode ?? -1)
         }
     }

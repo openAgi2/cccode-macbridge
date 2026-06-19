@@ -123,9 +123,16 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 	cmd := exec.CommandContext(cs.ctx, bin, args...)
 	cmd.Dir = cs.workDir
 	prepareCmdForKill(cmd)
-	if len(cs.extraEnv) > 0 {
-		cmd.Env = core.MergeEnv(os.Environ(), cs.extraEnv)
-	}
+	// Controlled agent env: minimal runtime allowlist + provider/session env,
+	// with CCCODE_* / OPENCODE_SERVER_* control-plane secrets denied at every
+	// layer. Always set cmd.Env (previously only set when extraEnv existed,
+	// which meant a subprocess with no extra env inherited the full supervisor
+	// env verbatim — the control-plane leak).
+	cmd.Env = core.BuildAgentEnv(
+		core.FilterEnvToAllowlist(os.Environ(), core.AgentEnvRuntimeAllowlist()),
+		cs.extraEnv,
+		nil,
+	)
 	cmd.Stdin = strings.NewReader(prompt)
 
 	stdout, err := cmd.StdoutPipe()
@@ -245,8 +252,9 @@ func (cs *codexSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf 
 		if err := cmd.Wait(); err != nil {
 			stderrMsg := strings.TrimSpace(stderrBuf.String())
 			if stderrMsg != "" {
-				slog.Error("codexSession: process failed", "error", err, "stderr", stderrMsg)
-				evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", stderrMsg)}
+				redacted := core.RedactStderr(stderrMsg)
+				slog.Error("codexSession: process failed", "error", err, "stderr", redacted)
+				evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", redacted)}
 				select {
 				case cs.events <- evt:
 				case <-cs.ctx.Done():
@@ -609,9 +617,13 @@ func loadCodexRuntimeConfig(ctx context.Context, workDir string, extraEnv []stri
 	cmd := exec.CommandContext(ctx, "codex", "app-server")
 	cmd.Dir = workDir
 	prepareCmdForKill(cmd)
-	if len(extraEnv) > 0 {
-		cmd.Env = core.MergeEnv(os.Environ(), extraEnv)
-	}
+	// Controlled agent env: always set (deny CCCODE_* control-plane leakage
+	// even when extraEnv is empty).
+	cmd.Env = core.BuildAgentEnv(
+		core.FilterEnvToAllowlist(os.Environ(), core.AgentEnvRuntimeAllowlist()),
+		extraEnv,
+		nil,
+	)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

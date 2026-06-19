@@ -16,6 +16,25 @@ import (
 	"github.com/openAgi2/cccode-macbridge/core"
 )
 
+// newTestHandlers builds a Handlers bound to a cancellable context and arranges
+// Shutdown on test cleanup. This avoids leaking the cleanup/observation
+// goroutines that NewHandlers() (context.Background()) would leave running
+// across the test binary — required by T09 (tests must not depend on global
+// default instances and must not leak background goroutines).
+func newTestHandlers(t *testing.T) *Handlers {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	h := NewHandlersWithContext(ctx)
+	h.Start(ctx) // T09: 显式启动 observation lease loop（构造函数不再自动起）
+	t.Cleanup(func() {
+		cancel()
+		shutdownCtx, sc := context.WithTimeout(context.Background(), 2*time.Second)
+		defer sc()
+		_ = h.Shutdown(shutdownCtx)
+	})
+	return h
+}
+
 type fakeAgent struct {
 	name               string
 	startErr           error
@@ -344,7 +363,7 @@ func readJSONMaps(t *testing.T, clientConn *websocket.Conn, count int) []map[str
 }
 
 func TestBackendListSkipsPermissionResolveForOpenCode(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", &fakeAgent{name: "opencode"})
 
 	backends := handlers.BackendList()
@@ -359,7 +378,7 @@ func TestBackendListSkipsPermissionResolveForOpenCode(t *testing.T) {
 }
 
 func TestBackendListSkipsPermissionResolveForCodex(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex"})
 
 	backends := handlers.BackendList()
@@ -374,7 +393,7 @@ func TestBackendListSkipsPermissionResolveForCodex(t *testing.T) {
 }
 
 func TestBackendListAdvertisesPermissionMode(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex"})
 
 	backends := handlers.BackendList()
@@ -390,7 +409,7 @@ func TestBackendListAdvertisesPermissionMode(t *testing.T) {
 }
 
 func TestListPermissionModesReturnsCurrentMode(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	agent := &fakeAgent{
 		name: "codex",
 		mode: "default",
@@ -420,7 +439,7 @@ func TestListPermissionModesReturnsCurrentMode(t *testing.T) {
 }
 
 func TestSetPermissionModeAppliesToLiveSessionWhenSupported(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	agent := &fakeAgent{name: "codex", mode: "default"}
 	session := &fakeAgentSession{id: "ses_1", events: make(chan core.Event, 1), liveModeOK: true}
 	handlers.putSessionWithMeta("ses_1", "codex", "/tmp/project", session)
@@ -487,7 +506,7 @@ func TestReadFileEnforcesAuthorizedWorkspaceBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex", workDir: workspace})
 
 	tests := []struct {
@@ -552,7 +571,7 @@ func TestReadFileFailsClosedWithoutServerAuthorizedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &unsupportedMutationAgent{name: "codex"})
 	conn := &readFileCaptureConn{}
 
@@ -570,7 +589,7 @@ func TestReadFileFailsClosedWithoutServerAuthorizedWorkspace(t *testing.T) {
 }
 
 func TestBackendListAdvertisesMemoryDiagnosticsAndUsageCapabilities(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", &fakeAgent{
 		name:             "claudecode",
 		memoryFiles:      []core.MemoryFile{{ID: "project:claude", Name: "CLAUDE.md"}},
@@ -598,7 +617,7 @@ func TestBackendListAdvertisesMemoryDiagnosticsAndUsageCapabilities(t *testing.T
 }
 
 func TestBackendListAdvertisesMemoryReadForCodexProvider(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{
 		name:        "codex",
 		memoryFiles: []core.MemoryFile{{ID: "project:agents", Name: "AGENTS.md", Scope: "project"}},
@@ -622,7 +641,7 @@ func TestBackendListAdvertisesMemoryReadForCodexProvider(t *testing.T) {
 }
 
 func TestBackendListAdvertisesProviderSwitchForCodex(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{
 		name: "codex",
 		providers: []core.ProviderConfig{{
@@ -649,7 +668,7 @@ func TestBackendListAdvertisesProviderSwitchForCodex(t *testing.T) {
 }
 
 func TestBackendListAdvertisesSessionMutationCapabilityWhenRenameAndArchiveExist(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", &fakeAgent{
 		name:          "claudecode",
 		renameResult:  &core.AgentSessionInfo{ID: "ses_1"},
@@ -695,7 +714,7 @@ func TestOpenCodeSendMessageUsesAgentSessionAndReusesSameConfig(t *testing.T) {
 		sess.events <- core.Event{Type: core.EventResult, Done: true}
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", agent)
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy(proxyServer.URL, "", ""))
 
@@ -769,7 +788,7 @@ func TestOpenCodeSendMessageRecreatesSessionWhenConfigChanges(t *testing.T) {
 		sess.events <- core.Event{Type: core.EventResult, Done: true}
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", agent)
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy(proxyServer.URL, "", ""))
 
@@ -832,7 +851,7 @@ func TestOpenCodeAbortGenerationCallsHTTPAbortAndCleansSession(t *testing.T) {
 	}))
 	defer proxyServer.Close()
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy(proxyServer.URL, "", ""))
 	session := &fakeAgentSession{id: "ses_1", events: make(chan core.Event, 1)}
 	handlers.putSession("ses_1", session)
@@ -875,7 +894,7 @@ func TestOpenCodeAbortGenerationCallsHTTPAbortAndCleansSession(t *testing.T) {
 }
 
 func TestOpenCodeResolvePermissionReturnsUnsupported(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
 
@@ -900,7 +919,7 @@ func TestOpenCodeResolvePermissionReturnsUnsupported(t *testing.T) {
 
 func TestHandleSessionMutationsReturnNotSupported(t *testing.T) {
 	agent := &unsupportedMutationAgent{name: "codex"}
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 
 	tests := []struct {
@@ -989,7 +1008,7 @@ func TestReadOnlySessionRequestsDoNotSwitchWorkDir(t *testing.T) {
 					Timestamp: time.Unix(1, 0).UTC(),
 				}},
 			}
-			handlers := NewHandlers()
+			handlers := newTestHandlers(t)
 			handlers.RegisterAgent("codex", agent)
 			serverConn, clientConn, cleanup := openTestConn(t)
 			defer cleanup()
@@ -1010,7 +1029,7 @@ func TestReadOnlySessionRequestsDoNotSwitchWorkDir(t *testing.T) {
 }
 
 func TestOpenCodeSessionMutationsReturnNotSupported(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", &unsupportedMutationAgent{name: "opencode"})
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy("http://127.0.0.1:1", "", ""))
 
@@ -1077,7 +1096,7 @@ func TestHandleGetSessionMessagesPrefersRichHistoryProvider(t *testing.T) {
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1140,7 +1159,7 @@ func TestHandleGetSessionMessagesSynthesizesMissingRichHistoryIDs(t *testing.T) 
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1182,7 +1201,7 @@ func TestHandleGetSessionMessagesFallsBackToLegacyHistoryWhenRichHistoryUnsuppor
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1222,7 +1241,7 @@ func TestHandleGetSessionMessagesFallsBackToLegacyHistoryWhenRichHistoryUnsuppor
 }
 
 func TestBackendListAdvertisesTodosWhenProviderExists(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex", todos: []core.Todo{{Content: "ship it", Status: "pending"}}})
 
 	backends := handlers.BackendList()
@@ -1242,7 +1261,7 @@ func TestBackendListAdvertisesTodosWhenProviderExists(t *testing.T) {
 }
 
 func TestRegisterAckAdvertisesTodosCapabilityForCodexProvider(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex", todos: []core.Todo{{Content: "ship it", Status: "pending"}}})
 	server := NewServer(handlers)
 	serverConn, clientConn, cleanup := openTestConn(t)
@@ -1279,7 +1298,7 @@ func TestRegisterAckAdvertisesTodosCapabilityForCodexProvider(t *testing.T) {
 }
 
 func TestRegisterAckAdvertisesProviderSwitchCapabilityForCodex(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{
 		name: "codex",
 		providers: []core.ProviderConfig{{
@@ -1318,7 +1337,7 @@ func TestRegisterAckAdvertisesProviderSwitchCapabilityForCodex(t *testing.T) {
 }
 
 func TestHandleListProvidersReturnsEmptyListForCodex(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex"})
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1353,7 +1372,7 @@ func TestHandleSetProviderSwitchesCodexActiveProvider(t *testing.T) {
 		activeProvider: "openai",
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1407,7 +1426,7 @@ func TestHandleSetProviderReturnsNotFoundForCodex(t *testing.T) {
 		providers: []core.ProviderConfig{{Name: "openai"}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1477,7 +1496,7 @@ func TestCodexProviderSwitchOnlyAffectsNewSessions(t *testing.T) {
 		sess.events <- core.Event{Type: core.EventResult, Done: true}
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1543,7 +1562,7 @@ func TestCodexCreateSessionIsLazyAndSendAppliesSelectedModel(t *testing.T) {
 		sess.events <- core.Event{Type: core.EventResult, Done: true}
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1595,7 +1614,7 @@ func TestCodexPendingSessionRebindsToRealSessionID(t *testing.T) {
 		sess.events <- core.Event{Type: core.EventResult, SessionID: "real-codex-thread", Done: true}
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1653,7 +1672,7 @@ func TestHandleFetchTodosReturnsProviderData(t *testing.T) {
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1695,7 +1714,7 @@ func TestCodexTodosBridgeFlowKeepsFetchAuthoritativeAfterPlanEvent(t *testing.T)
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1815,7 +1834,7 @@ func TestHandleListMemoryFilesForCodexProvider(t *testing.T) {
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1871,7 +1890,7 @@ func TestHandleReadMemoryFileForCodexProvider(t *testing.T) {
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1913,7 +1932,7 @@ func TestHandleListMemoryFilesReturnsProviderData(t *testing.T) {
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -1959,7 +1978,7 @@ func TestHandleReadMemoryFileReturnsProviderData(t *testing.T) {
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2001,7 +2020,7 @@ func TestHandleGetUsageReturnsProviderData(t *testing.T) {
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2047,7 +2066,7 @@ func TestHandleRunDiagnosticsStreamsProgressAndCompletion(t *testing.T) {
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2093,7 +2112,7 @@ func TestHandleRenameSessionReturnsUpdatedSession(t *testing.T) {
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2128,7 +2147,7 @@ func TestHandleArchiveSessionReturnsArchivedSession(t *testing.T) {
 		},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2162,7 +2181,7 @@ func TestHandleGetSessionReturnsSingleSessionPayload(t *testing.T) {
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2208,7 +2227,7 @@ func TestHandleGetSessionMessagesStoresLargeToolOutputAsContentRef(t *testing.T)
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("claudecode", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2275,7 +2294,7 @@ func TestHandleGetSessionMessagesStoresLargeToolOutputAsContentRef(t *testing.T)
 
 func TestHandleFetchTodosReturnsUnsupportedWhenProviderDeclines(t *testing.T) {
 	agent := &fakeAgent{name: "codex", todosErr: core.ErrNotSupported}
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2306,7 +2325,7 @@ func TestHandleListAgentsReturnsProviderData(t *testing.T) {
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2331,7 +2350,7 @@ func TestHandleListAgentsReturnsProviderData(t *testing.T) {
 
 func TestHandleListAgentsReturnsUnsupportedWhenProviderDeclines(t *testing.T) {
 	agent := &fakeAgent{name: "codex", agentsErr: core.ErrNotSupported}
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2381,7 +2400,7 @@ func TestOpenCodeGetSessionMessagesUsesAgentRichHistoryProvider(t *testing.T) {
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", agent)
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy(proxyServer.URL, "", ""))
 	serverConn, clientConn, cleanup := openTestConn(t)
@@ -2418,7 +2437,7 @@ func TestCodexGetSessionMessagesDoesNotResumeSession(t *testing.T) {
 			Timestamp: time.Unix(1710000200, 0).UTC(),
 		}},
 	}
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", agent)
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
@@ -2458,7 +2477,7 @@ func TestOpenCodeListAgentsUsesAgentProvider(t *testing.T) {
 		}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", agent)
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy(proxyServer.URL, "", ""))
 	serverConn, clientConn, cleanup := openTestConn(t)
@@ -2496,7 +2515,7 @@ func TestOpenCodeFetchTodosUsesAgentProvider(t *testing.T) {
 		todos: []core.Todo{{Content: "bridge todo", Status: "pending", Priority: "normal"}},
 	}
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", agent)
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy(proxyServer.URL, "", ""))
 	serverConn, clientConn, cleanup := openTestConn(t)
@@ -2547,7 +2566,7 @@ func TestBackendListCompressionCapabilityOnlyForCodexAppServer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handlers := NewHandlers()
+			handlers := newTestHandlers(t)
 			handlers.RegisterAgent(tt.agentID, &fakeAgent{name: tt.agentID})
 			if tt.agentID == "codex" {
 				handlers.SetCodexBackendMode(tt.backendMode)
@@ -2574,7 +2593,7 @@ func TestHandleCompressContextNotSupported(t *testing.T) {
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex"})
 	session := &fakeAgentSession{id: "ses_1", events: make(chan core.Event, 1)}
 	handlers.mu.Lock()
@@ -2602,7 +2621,7 @@ func TestHandleCompressContextSessionNotFound(t *testing.T) {
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex"})
 	handlers.HandleRPC(serverConn, WireMessage{
 		BackendID: "codex",
@@ -2622,7 +2641,7 @@ func TestHandleCompressContextAccepted(t *testing.T) {
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex"})
 	compactSession := &compactableFakeSession{
 		fakeAgentSession: &fakeAgentSession{id: "ses_1", events: make(chan core.Event, 1)},
@@ -2652,7 +2671,7 @@ func TestHandleCompressContextCompactError(t *testing.T) {
 	serverConn, clientConn, cleanup := openTestConn(t)
 	defer cleanup()
 
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("codex", &fakeAgent{name: "codex"})
 	compactSession := &compactableFakeSession{
 		fakeAgentSession: &fakeAgentSession{id: "ses_1", events: make(chan core.Event, 1)},
@@ -2677,7 +2696,7 @@ func TestHandleCompressContextCompactError(t *testing.T) {
 }
 
 func TestBackendListAdvertisesDiagnosticsForOpenCodeAndCodex(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", &fakeAgent{
 		name:             "opencode",
 		diagnosticReport: &core.DiagnosticReport{},
@@ -2707,7 +2726,7 @@ func TestBackendListAdvertisesDiagnosticsForOpenCodeAndCodex(t *testing.T) {
 }
 
 func TestRunDiagnosticsReturnsResultsForOpenCode(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", &fakeAgent{
 		name: "opencode",
 		diagnosticReport: &core.DiagnosticReport{
@@ -2739,7 +2758,7 @@ func TestRunDiagnosticsReturnsResultsForOpenCode(t *testing.T) {
 }
 
 func TestRunDiagnosticsReturnsNotSupportedWhenNoProvider(t *testing.T) {
-	handlers := NewHandlers()
+	handlers := newTestHandlers(t)
 	handlers.RegisterAgent("opencode", &unsupportedMutationAgent{name: "opencode"})
 	handlers.RegisterOpenCodeProxy(NewOpenCodeProxy("http://127.0.0.1:1", "", ""))
 

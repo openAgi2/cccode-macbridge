@@ -432,6 +432,9 @@ func appServerSessionTransport(appServerURLSet bool) string {
 	return appServerTransportStdio
 }
 
+// Stop is a no-op for now. Per-session Close() already reaps each codex
+// process group on shutdown (Handlers.Shutdown → AgentSession.Close).
+// TODO: process-group stop at the Agent level.
 func (a *Agent) Stop() error { return nil }
 
 // SetMode changes the approval mode for future sessions.

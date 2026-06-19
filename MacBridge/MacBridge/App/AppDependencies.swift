@@ -163,22 +163,31 @@ class AppDependencies: ObservableObject {
     /// 远程 URL 变更回调：从 UserDefaults 读取最新 remoteURL，更新配置并重启
     private func handleRemoteURLChange() {
         let remoteURL = UserDefaults.standard.string(forKey: "remoteBridgeURL") ?? ""
-        runtimeManager.config.remoteURL = remoteURL
-        runtimeManager.config.includeTailscaleInPairing = UserDefaults.standard.object(forKey: "pairingIncludeTailscale") as? Bool ?? true
-        runtimeManager.config.includeRemoteInPairing = UserDefaults.standard.object(forKey: "pairingIncludeRemote") as? Bool ?? true
+        let includeTailscaleInPairing = UserDefaults.standard.object(forKey: "pairingIncludeTailscale") as? Bool ?? true
+        let includeRemoteInPairing = UserDefaults.standard.object(forKey: "pairingIncludeRemote") as? Bool ?? true
         let configuredRelayEndpoint = OfficialRelayConfiguration.endpoint
         let savedRelayEndpoint = UserDefaults.standard.string(forKey: "relayEndpoint") ?? ""
         let hasCurrentRelayRoute = !configuredRelayEndpoint.isEmpty &&
             savedRelayEndpoint == configuredRelayEndpoint
-        runtimeManager.config.relayEndpoint = hasCurrentRelayRoute ? configuredRelayEndpoint : ""
-        runtimeManager.config.relayRouteID = hasCurrentRelayRoute
+        let relayEndpoint = hasCurrentRelayRoute ? configuredRelayEndpoint : ""
+        let relayRouteID = hasCurrentRelayRoute
             ? UserDefaults.standard.string(forKey: "relayRouteID") ?? ""
             : ""
-        runtimeManager.config.relayCredential = hasCurrentRelayRoute
+        let relayCredential = hasCurrentRelayRoute
             ? RelayRouteCredentialStore.load()
             : ""
-        runtimeManager.config.relayServiceAddress = UserDefaults.standard.string(forKey: "relayServiceAddress") ?? ""
-        runtimeManager.restart()
+        let relayServiceAddress = UserDefaults.standard.string(forKey: "relayServiceAddress") ?? ""
+
+        // T05: 原子合并所有字段变更后只 restart 一次（替代原先先改字段再 restart 的两次赋值路径）。
+        runtimeManager.applyConfigAndRestart { c in
+            c.remoteURL = remoteURL
+            c.includeTailscaleInPairing = includeTailscaleInPairing
+            c.includeRemoteInPairing = includeRemoteInPairing
+            c.relayEndpoint = relayEndpoint
+            c.relayRouteID = relayRouteID
+            c.relayCredential = relayCredential
+            c.relayServiceAddress = relayServiceAddress
+        }
 
         if OfficialRelayConfiguration.isAvailable && !hasCurrentRelayRoute {
             Task { [weak self] in
@@ -186,10 +195,14 @@ class AppDependencies: ObservableObject {
                     let relay = try await OfficialRelayProvisioner.shared.ensureRoute()
                     guard let self else { return }
                     guard relay.endpoint == OfficialRelayConfiguration.endpoint else { return }
-                    self.runtimeManager.config.relayEndpoint = relay.endpoint
-                    self.runtimeManager.config.relayRouteID = relay.routeID
-                    self.runtimeManager.config.relayCredential = relay.credential
-                    self.runtimeManager.restart()
+                    // T05: Relay provisioning 完成后，用 applyConfigAndRestart 合并字段并只 restart 一次。
+                    // 由于 restart() 的 launch generation + 可取消 Task，若与上一次 restart 在 1.5s 窗口内
+                    // 重叠，会自动收敛为单次 launch（不再双 restart）。
+                    self.runtimeManager.applyConfigAndRestart { c in
+                        c.relayEndpoint = relay.endpoint
+                        c.relayRouteID = relay.routeID
+                        c.relayCredential = relay.credential
+                    }
                 } catch {
                     NSLog("[AppDependencies] Relay 地址变更后启用失败: \(error.localizedDescription)")
                 }

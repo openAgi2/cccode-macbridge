@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"context"
 	"crypto/ecdh"
 	"encoding/base64"
 
@@ -11,6 +12,7 @@ import (
 
 func newTestRelayEventRouter() *RelayEventRouter {
 	observation := NewObservationManager()
+	observation.Start(context.Background()) // T09: 显式启动 lease loop
 	prekeys := NewPrekeyStore("brg_fixture")
 	mailbox := NewMailboxService(NewRelayHub())
 	outbox := NewOutboxManager(prekeys)

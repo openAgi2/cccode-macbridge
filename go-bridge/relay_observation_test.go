@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"context"
 	"encoding/json"
 	"sync/atomic"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 func TestObservationSetAndGet(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	om.SetScope("dev_1", ObservationScope{
@@ -34,6 +36,7 @@ func TestObservationSetAndGet(t *testing.T) {
 
 func TestObservationFullStreamSendsAll(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	om.SetScope("dev_1", ObservationScope{
@@ -53,6 +56,7 @@ func TestObservationFullStreamSendsAll(t *testing.T) {
 
 func TestObservationMilestonesOnlySendsDurable(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	om.SetScope("dev_1", ObservationScope{
@@ -80,6 +84,7 @@ func TestObservationMilestonesOnlySendsDurable(t *testing.T) {
 
 func TestObservationLeaseExpiry(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	// 设置极短租约
@@ -108,6 +113,7 @@ func TestObservationLeaseExpiry(t *testing.T) {
 
 func TestObservationSessionFilter(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	om.SetScope("dev_1", ObservationScope{
@@ -139,6 +145,7 @@ func TestObservationSessionFilter(t *testing.T) {
 
 func TestObservationNoScopeDefaultsToMilestones(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	// 无 scope 时默认只发送 durable milestones

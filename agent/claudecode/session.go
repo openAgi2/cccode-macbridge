@@ -144,12 +144,21 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 	}
 	cmd := core.BuildSpawnCommand(sessionCtx, spawnOpts, cliBin, allArgs...)
 	cmd.Dir = workDir
-	// Filter out CLAUDECODE env var to prevent "nested session" detection,
-	// since cc-connect is a bridge, not a nested Claude Code session.
-	env := filterEnv(os.Environ(), "CLAUDECODE")
-	if len(extraEnv) > 0 {
-		env = core.MergeEnv(env, extraEnv)
-	}
+	// Put the CLI (and any wrapper/sudo/plugin children) in its own process
+	// group so Close() can reap the whole tree with one negative-PID signal,
+	// matching codex. Without this, grandchildren can outlive shutdown.
+	prepareCmdForProcessGroup(cmd)
+	// Build a controlled agent environment: start from a minimal runtime
+	// allowlist (NOT raw os.Environ(), which would leak CCCODE_* control-plane
+	// secrets), then merge the provider/session env. The CCCODE_* / CLAUDECODE /
+	// OPENCODE_SERVER_* deny list is applied inside BuildAgentEnv on every
+	// layer (the old filterEnv(os.Environ(),"CLAUDECODE") nested-session guard
+	// is subsumed by the deny list).
+	env := core.BuildAgentEnv(
+		core.FilterEnvToAllowlist(os.Environ(), core.AgentEnvRuntimeAllowlist()),
+		extraEnv,
+		nil,
+	)
 	// When run_as_user is set, strip the supervisor's environment down to
 	// the allowlist before passing it to sudo. sudo --preserve-env also
 	// enforces this, but filtering here makes the cc-connect spawn argv
@@ -279,8 +288,12 @@ func (cs *claudeSession) finishReadLoop(waitErrCh <-chan error, stderrBuf *bytes
 			stderrMsg = strings.TrimSpace(stderrBuf.String())
 		}
 		if stderrMsg != "" {
-			slog.Error("claudeSession: process failed", "error", err, "stderr", stderrMsg)
-			evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", stderrMsg)}
+			// Redact before the stderr enters slog or EventError — agents may
+			// echo their own environment, which must not exfiltrate control-
+			// plane / data-plane secrets through the bridge's error channel.
+			redacted := core.RedactStderr(stderrMsg)
+			slog.Error("claudeSession: process failed", "error", err, "stderr", redacted)
+			evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", redacted)}
 			select {
 			case cs.events <- evt:
 			case <-cs.ctx.Done():
@@ -808,9 +821,10 @@ func (cs *claudeSession) Close() error {
 	}
 
 	// Phase 2: SIGTERM — gives the process a second chance to run
-	// cleanup handlers that respond to signals but not stdin EOF.
+	// cleanup handlers that respond to signals but not stdin EOF. Signal the
+	// whole process group so wrapper/sudo/plugin children are reaped too.
 	if cs.cmd != nil && cs.cmd.Process != nil {
-		_ = cs.cmd.Process.Signal(syscall.SIGTERM)
+		_ = signalProcessGroup(cs.cmd, syscall.SIGTERM)
 	}
 
 	select {
@@ -821,10 +835,11 @@ func (cs *claudeSession) Close() error {
 		slog.Warn("claudeSession: SIGTERM timed out, sending SIGKILL")
 	}
 
-	// Phase 3: SIGKILL — last resort.
+	// Phase 3: SIGKILL — last resort. Kill the process group so no
+	// grandchild (shell wrapper, sudo run_as_user, agent plugin) survives.
 	cs.cancel()
 	if cs.cmd != nil && cs.cmd.Process != nil {
-		_ = cs.cmd.Process.Kill()
+		_ = forceKillProcessGroup(cs.cmd)
 	}
 	<-cs.done
 	return nil
@@ -861,14 +876,6 @@ func shellJoinArgs(args []string) string {
 	return b.String()
 }
 
-// filterEnv returns a copy of env with entries matching the given key removed.
-func filterEnv(env []string, key string) []string {
-	prefix := key + "="
-	out := make([]string, 0, len(env))
-	for _, e := range env {
-		if !strings.HasPrefix(e, prefix) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
+// (filterEnv removed: its role is subsumed by core.BuildAgentEnv's deny list,
+// which strips CLAUDECODE / CCCODE_* / OPENCODE_SERVER_* from every env layer.)
+

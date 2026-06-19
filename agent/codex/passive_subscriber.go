@@ -531,16 +531,9 @@ func (s *passiveSubscriber) writeJSON(v any) error {
 
 func (s *passiveSubscriber) Close() error {
 	s.cancel()
-	s.closeOnce.Do(func() {
-		if s.conn != nil {
-			_ = s.conn.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-				time.Now().Add(2*time.Second),
-			)
-			_ = s.conn.Close()
-		}
-	})
+	// Tear down the connection once (inside closeOnce). The events channel is
+	// closed ONLY after the producer (wg) exits — never from the timeout
+	// branch — so a still-running producer can't panic on a closed-channel send.
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -548,11 +541,42 @@ func (s *passiveSubscriber) Close() error {
 	}()
 	select {
 	case <-done:
+		s.closeOnce.Do(func() {
+			s.closeConnAndEvents()
+		})
 	case <-time.After(3 * time.Second):
-		slog.Debug("codex passive subscriber: close timeout")
+		slog.Debug("codex passive subscriber: close timeout, deferring events close until readLoop exits")
+		s.closeOnce.Do(func() {
+			// Close the conn now to unblock the producer, but defer events
+			// close until wg actually exits.
+			s.closeConnOnly()
+			go func() {
+				<-done
+				close(s.events)
+			}()
+		})
 	}
-	close(s.events)
 	return nil
+}
+
+// closeConnOnly sends a close frame and tears down the underlying conn without
+// touching the events channel.
+func (s *passiveSubscriber) closeConnOnly() {
+	if s.conn != nil {
+		_ = s.conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(2*time.Second),
+		)
+		_ = s.conn.Close()
+	}
+}
+
+// closeConnAndEvents closes the conn then the events channel (producer already
+// exited, so closing events is safe).
+func (s *passiveSubscriber) closeConnAndEvents() {
+	s.closeConnOnly()
+	close(s.events)
 }
 
 // Subscribe implements core.EventSubscriber for the Codex agent.

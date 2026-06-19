@@ -55,6 +55,16 @@ type Handlers struct {
 	transcriptIndex         *transcriptindex.Store
 	// capabilityPolicy 是集中式 RPC 授权层（P3 架构演进，§3.2/§8）。
 	capabilityPolicy *CapabilityPolicy
+
+	// ctx is the root context whose cancellation propagates runtime shutdown
+	// to active agent sessions (StartSession uses it instead of
+	// context.Background()). Connection drops must NOT cancel sessions (the
+	// agent outlives a single WS connection); only runtime shutdown cancels it.
+	ctx context.Context
+	// cleanupStop closes the StartCleanupLoop goroutine on shutdown.
+	cleanupStop chan struct{}
+	// shutdownOnce makes Handlers.Shutdown idempotent.
+	shutdownOnce sync.Once
 }
 
 type opencodeSessionOptions struct {
@@ -63,6 +73,17 @@ type opencodeSessionOptions struct {
 }
 
 func NewHandlers() *Handlers {
+	return newHandlersWithContext(context.Background())
+}
+
+// NewHandlersWithContext creates a Handlers bound to the given root context.
+// Cancelling ctx propagates shutdown to active agent sessions. Prefer this in
+// main() so SIGTERM/management shutdown reaches in-flight turns.
+func NewHandlersWithContext(ctx context.Context) *Handlers {
+	return newHandlersWithContext(ctx)
+}
+
+func newHandlersWithContext(ctx context.Context) *Handlers {
 	prekeys := NewPrekeyStore("")
 	observation := NewObservationManager()
 	outbox := NewOutboxManager(prekeys)
@@ -83,6 +104,8 @@ func NewHandlers() *Handlers {
 		claudeSessions:         newDefaultClaudeSessionCatalog(),
 		transcriptIndex:        transcriptindex.NewStore(defaultTranscriptIndexDir()),
 		capabilityPolicy:       NewCapabilityPolicy(),
+		ctx:                    ctx,
+		cleanupStop:            make(chan struct{}),
 	}
 }
 
@@ -180,12 +203,96 @@ func (h *Handlers) putSessionWithMeta(sessionID, backendID, directory string, se
 	h.sessions.put(sessionID, backendID, directory, sess)
 }
 
+// Start launches background goroutines that NewHandlers no longer auto-starts
+// (T09): the observation lease-check loop. Idempotent. main() calls this once
+// after NewHandlersWithContext(ctx); Shutdown stops it. Tests that need lease
+// expiry must call Start too.
+func (h *Handlers) Start(ctx context.Context) {
+	if h.observation != nil {
+		h.observation.Start(ctx)
+	}
+}
+
+// StartCleanupLoop launches the idle-session reaper. It stops when the root
+// context is cancelled or Shutdown closes h.cleanupStop. Uses a stoppable
+// time.NewTicker instead of time.Tick (which can never be stopped).
 func (h *Handlers) StartCleanupLoop(interval time.Duration) {
 	go func() {
-		for range time.Tick(interval) {
-			h.cleanupIdleSessions()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				h.cleanupIdleSessions()
+			case <-h.ctx.Done():
+				return
+			case <-h.cleanupStop:
+				return
+			}
 		}
 	}()
+}
+
+// Shutdown stops background goroutines (cleanup loop, observation lease
+// checker) and closes every active agent session in the registry, bounded by
+// ctx's deadline. Idempotent. Callers (main shutdown, tests) use this instead
+// of relying on process exit to reclaim agent subprocesses.
+func (h *Handlers) Shutdown(ctx context.Context) error {
+	h.shutdownOnce.Do(func() {
+		// Stop accepting reaps and stop the observation lease loop.
+		close(h.cleanupStop)
+		if h.observation != nil {
+			h.observation.Stop()
+		}
+
+		// Snapshot active sessions under the lock and clear the registry so
+		// new lookups observe the shutdown. Close each session outside the lock
+		// to avoid holding it across a potentially blocking Close().
+		h.mu.Lock()
+		toClose := h.sessions.drain()
+		h.mu.Unlock()
+
+		// Close each session honoring the caller's deadline so a wedged agent
+		// can't hang shutdown forever. Each AgentSession.Close has its own
+		// internal escalation (SIGTERM→SIGKILL / process-group kill).
+		done := make(chan struct{})
+		go func() {
+			var wg sync.WaitGroup
+			for _, sess := range toClose {
+				wg.Add(1)
+				go func(s core.AgentSession) {
+					defer wg.Done()
+					closeWithTimeout(s, ctx)
+				}(sess)
+			}
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			slog.Warn("go-bridge: handlers.Shutdown deadline exceeded, some sessions may not have closed cleanly")
+		}
+	})
+	return nil
+}
+
+// closeWithTimeout closes a session but does not block longer than the parent
+// ctx allows. AgentSession.Close already has its own internal escalation
+// (SIGTERM→SIGKILL / process-group kill); this is the outer bound.
+func closeWithTimeout(sess core.AgentSession, ctx context.Context) {
+	if sess == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = sess.Close()
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 func (h *Handlers) cleanupIdleSessions() {
@@ -355,7 +462,7 @@ func (h *Handlers) ensureOpenCodeSession(agent core.Agent, sessionID, modelID, d
 		}
 	}
 
-	newSession, err := agent.StartSession(context.Background(), sessionID)
+	newSession, err := agent.StartSession(h.ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -1531,7 +1638,7 @@ func (h *Handlers) handleCreateSession(conn Connection, msg WireMessage, agent c
 		return
 	}
 
-	sess, err := agent.StartSession(context.Background(), "")
+	sess, err := agent.StartSession(h.ctx, "")
 	if err != nil {
 		conn.SendResult(msg.RequestID, nil, &WireError{Code: "create_failed", Message: err.Error()})
 		return
@@ -1601,7 +1708,7 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 		}
 		slog.Info("go-bridge: handleSendMessage: session not found in registry. Starting new agent session.", "sessionID", params.SessionID, "resumeID", resumeID)
 		var err error
-		sess, err = agent.StartSession(context.Background(), resumeID)
+		sess, err = agent.StartSession(h.ctx, resumeID)
 		if err != nil {
 			slog.Error("go-bridge: handleSendMessage: StartSession failed", "sessionID", params.SessionID, "resumeID", resumeID, "error", err)
 			conn.SendResult(msg.RequestID, nil, &WireError{Code: "session_not_found", Message: err.Error()})

@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -48,18 +49,28 @@ type ObservationManager struct {
 	devices    map[string]*DeviceObservation // deviceID -> observation
 	leaseTimer *time.Ticker
 	stopCh     chan struct{}
+	startOnce  sync.Once
+	stopOnce   sync.Once
 }
 
-// NewObservationManager 创建 observation manager。
+// NewObservationManager 创建 observation manager。T09: 构造函数不再启动 lease loop——
+// 调用方（Handlers）必须显式 Start(ctx) 启动，Shutdown 时 Stop()。构造函数内无 go ... 语句，
+// 满足 plan §3.9「observation 由显式 Start 启动」。历史调用方（部分测试）可仍用 NewObservationManager，
+// 但需在需要租约过期时调用 Start。
 func NewObservationManager() *ObservationManager {
-	om := &ObservationManager{
+	return &ObservationManager{
 		devices: make(map[string]*DeviceObservation),
 		stopCh:  make(chan struct{}),
 	}
-	// 启动租约检查
-	om.leaseTimer = time.NewTicker(5 * time.Second)
-	go om.leaseCheckLoop()
-	return om
+}
+
+// Start 启动租约检查 goroutine（幂等，仅一次）。Handlers 在构造后调用一次，
+// Shutdown 时调 Stop。取消 ctx 也会让 leaseCheckLoop 退出（通过 stopCh 兜底）。
+func (om *ObservationManager) Start(ctx context.Context) {
+	om.startOnce.Do(func() {
+		om.leaseTimer = time.NewTicker(5 * time.Second)
+		go om.leaseCheckLoop(ctx)
+	})
 }
 
 // SetScope 设置设备的 observation scope。
@@ -180,18 +191,24 @@ func (om *ObservationManager) GetScope(deviceID, backendID string) *ObservationS
 	return &copy
 }
 
-// Stop 停止租约检查循环。
+// Stop 停止租约检查循环（幂等）。Handlers.Shutdown 调用一次。
 func (om *ObservationManager) Stop() {
-	om.leaseTimer.Stop()
-	close(om.stopCh)
+	om.stopOnce.Do(func() {
+		if om.leaseTimer != nil {
+			om.leaseTimer.Stop()
+		}
+		close(om.stopCh)
+	})
 }
 
-func (om *ObservationManager) leaseCheckLoop() {
+func (om *ObservationManager) leaseCheckLoop(ctx context.Context) {
 	for {
 		select {
 		case <-om.leaseTimer.C:
 			om.checkLeases()
 		case <-om.stopCh:
+			return
+		case <-ctx.Done():
 			return
 		}
 	}

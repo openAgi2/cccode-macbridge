@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -284,10 +285,13 @@ func TestPassiveSubscribe_ReconnectAfterServerClose(t *testing.T) {
 	fake := newFakeAppServer()
 	defer fake.close()
 
-	closeCount := 0
+	// T11: closeCount 改 atomic.Int32，连接内 n := closeCount.Add(1) 取本次连接序号，
+	// 后续只比较局部 n（不再跨 goroutine 读写裸 int）。WebSocket onConnect 由多个连接
+	// goroutine 并发执行，裸 int 的 Write(:290)/Read(:311) 是实跑复现的 DATA RACE。
+	var closeCount atomic.Int32
 	fake.onConnect = func(conn *websocket.Conn) {
 		defer conn.Close()
-		closeCount++
+		n := closeCount.Add(1)
 
 		for {
 			_, data, err := conn.ReadMessage()
@@ -308,7 +312,7 @@ func TestPassiveSubscribe_ReconnectAfterServerClose(t *testing.T) {
 				})
 			case "initialized":
 				// 第一次连接：握手后立即关闭
-				if closeCount == 1 {
+				if n == 1 {
 					return
 				}
 				// 第二次连接：保持打开，发一个事件

@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"context"
 	"encoding/json"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,7 @@ import (
 // TestRegressionR1_LeaseAutoDowngrade 验证租约自动降级。
 func TestRegressionR1_LeaseAutoDowngrade(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	om.SetScope("dev_r1", ObservationScope{
@@ -57,6 +59,7 @@ func TestRegressionR1_LeaseAutoDowngrade(t *testing.T) {
 // TestRegressionR2_BackgroundScopeOnlyDurable 验证后台 scope 只投递 durable milestones。
 func TestRegressionR2_BackgroundScopeOnlyDurable(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	om.SetScope("dev_r2", ObservationScope{
@@ -134,6 +137,7 @@ func TestRegressionR4_OutboxResetRequiresNewEpoch(t *testing.T) {
 // TestRegressionR5_ObservationOutboxDeviceIsolation 验证设备间完全隔离。
 func TestRegressionR5_ObservationOutboxDeviceIsolation(t *testing.T) {
 	om := NewObservationManager()
+	om.Start(context.Background()) // T09: 显式启动 lease loop
 	defer om.Stop()
 
 	// dev_a: full_stream

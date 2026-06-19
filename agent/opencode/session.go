@@ -35,6 +35,15 @@ type opencodeSession struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	alive    atomic.Bool
+	// closeOnce guarantees events is closed exactly once, and ONLY after the
+	// producer (readLoop, tracked by wg) has exited. Closing from the timeout
+	// branch while a producer may still send would panic (closed-channel send);
+	// emit()'s default branch does NOT prevent that panic.
+	closeOnce sync.Once
+	// closeTimeout is how long Close() waits for the producer before deferring
+	// the events close. Defaults to opencodeSessionCloseTimeout; overridable in
+	// tests to exercise the timeout branch deterministically.
+	closeTimeout time.Duration
 
 	mu           sync.Mutex
 	inputTokens  int // accumulated from step_finish events
@@ -85,11 +94,13 @@ func (s *opencodeSession) Send(prompt string, images []core.ImageAttachment, fil
 
 	cmd := exec.CommandContext(s.ctx, s.cmd, args...)
 	cmd.Dir = s.workDir
-	env := os.Environ()
-	if len(s.extraEnv) > 0 {
-		env = core.MergeEnv(env, s.extraEnv)
-	}
-	cmd.Env = env
+	// Controlled agent env: minimal runtime allowlist + provider/session env,
+	// CCCODE_* / OPENCODE_SERVER_* denied at every layer.
+	cmd.Env = core.BuildAgentEnv(
+		core.FilterEnvToAllowlist(os.Environ(), core.AgentEnvRuntimeAllowlist()),
+		s.extraEnv,
+		nil,
+	)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -214,12 +225,16 @@ func (s *opencodeSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBu
 
 	stderrMsg := stderrBuf.String()
 	if stderrMsg != "" {
-		slog.Error("opencodeSession: process error", "stderr", truncate(stderrMsg, 500))
-		if strings.Contains(stderrMsg, "Session not found") {
+		redacted := core.RedactStderr(stderrMsg)
+		slog.Error("opencodeSession: process error", "stderr", truncate(redacted, 500))
+		// "Session not found" detection runs against the original (pre-redact)
+		// text because redaction preserves stable ASCII substrings, but check
+		// the redacted copy too for belt-and-braces.
+		if strings.Contains(stderrMsg, "Session not found") || strings.Contains(redacted, "Session not found") {
 			s.chatID.Store("")
 			slog.Warn("opencodeSession: cleared stale session ID")
 		}
-		evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", stderrMsg)}
+		evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", redacted)}
 		select {
 		case s.events <- evt:
 		case <-s.ctx.Done():
@@ -477,9 +492,26 @@ func (s *opencodeSession) Alive() bool {
 	return s.alive.Load()
 }
 
+// opencodeSessionCloseTimeout is how long Close() waits for readLoop to exit
+// after cancelling the context before force-abandoning the wg.Wait. The events
+// channel is NEVER closed from this timeout branch — it is closed only after
+// the producer (readLoop, tracked by wg) has confirmed exit, to avoid a
+// closed-channel send panic. If the timeout fires, a deferred goroutine keeps
+// waiting for done and then closes events.
+const opencodeSessionCloseTimeout = 8 * time.Second
+
+// opencodeSessionForceKillWait is the grace period after the close timeout
+// during which we still wait (in a background goroutine) for the producer to
+// exit before closing events.
+const opencodeSessionForceKillWait = 2 * time.Second
+
 func (s *opencodeSession) Close() error {
 	s.alive.Store(false)
 	s.cancel()
+	timeout := s.closeTimeout
+	if timeout <= 0 {
+		timeout = opencodeSessionCloseTimeout
+	}
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -487,11 +519,29 @@ func (s *opencodeSession) Close() error {
 	}()
 	select {
 	case <-done:
-	case <-time.After(8 * time.Second):
-		slog.Warn("opencodeSession: close timed out, abandoning wg.Wait")
+		// readLoop has exited; safe to close the events channel exactly once.
+		s.closeOnce.Do(func() { close(s.events) })
+		return nil
+	case <-time.After(timeout):
+		// Do NOT close(s.events) here: readLoop may still be running and a
+		// subsequent send would panic. Defer the close to a goroutine that
+		// waits for the producer to actually exit.
+		slog.Warn("opencodeSession: close timed out, deferring events channel close until readLoop exits",
+			"wait", opencodeSessionCloseTimeout)
+		go func() {
+			select {
+			case <-done:
+			case <-time.After(opencodeSessionForceKillWait):
+				// Even after force-kill wait, still defer to done — we never
+				// close events speculatively. readLoop will exit when its
+				// pipe/ctx is torn down; this goroutine ensures the close
+				// happens exactly once when it does.
+				<-done
+			}
+			s.closeOnce.Do(func() { close(s.events) })
+		}()
+		return nil
 	}
-	close(s.events)
-	return nil
 }
 
 func truncate(s string, maxRunes int) string {

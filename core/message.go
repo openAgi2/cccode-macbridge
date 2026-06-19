@@ -29,6 +29,117 @@ func MergeEnv(base, extra []string) []string {
 	return append(merged, extra...)
 }
 
+// controlPlaneEnvDenyPrefixes are env var name prefixes/values that must NEVER
+// reach an agent data-plane subprocess (Claude/Codex/OpenCode and their tool
+// children). These carry go-bridge's own control-plane secrets (management
+// token, relay credential/route/endpoint) and OpenCode server auth. Leaking
+// them lets a remote device pivot through an agent tool into loopback control
+// APIs, bypassing capability policy.
+//
+// NOTE: provider data-plane secrets (ANTHROPIC_API_KEY etc.) are NOT here —
+// agents need those to authenticate. Only control-plane keys are rejected.
+var controlPlaneEnvDenyPrefixes = []string{
+	"CCCODE_",            // go-bridge control plane (management token, relay creds, ...)
+	"OPENCODE_SERVER_",   // OpenCode HTTP API auth (server username/password)
+	"CLAUDECODE",         // nested-session detection marker (claudecode bridge)
+}
+
+// controlPlaneEnvDenyExact are full env var names that must never reach an
+// agent subprocess, in addition to the prefix list above.
+var controlPlaneEnvDenyExact = map[string]struct{}{
+	"OPENCODE_SERVER_USERNAME": {},
+	"OPENCODE_SERVER_PASSWORD": {},
+}
+
+// isControlPlaneEnv reports whether an env entry (KEY=VALUE form) is a
+// control-plane secret that must be stripped from agent environments.
+func isControlPlaneEnv(entry string) bool {
+	k, _, ok := strings.Cut(entry, "=")
+	if !ok {
+		return false
+	}
+	if _, deny := controlPlaneEnvDenyExact[k]; deny {
+		return true
+	}
+	for _, p := range controlPlaneEnvDenyPrefixes {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripControlPlaneEnv returns env with every control-plane entry removed.
+func stripControlPlaneEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if isControlPlaneEnv(e) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// agentEnvRuntimeAllowlist is the minimal set of runtime-essential env var
+// names that an agent CLI needs to run at all (find binaries, home dir,
+// locale, temp dir). Everything else inherited from the supervisor is dropped
+// so control-plane leakage can't ride along.
+var agentEnvRuntimeAllowlist = []string{
+	"PATH", "HOME", "USER", "LOGNAME",
+	"LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+	"TMPDIR", "SHELL",
+}
+
+// AgentEnvRuntimeAllowlist returns a copy of the minimal runtime-essential
+// env var name allowlist used to seed agent subprocess environments.
+func AgentEnvRuntimeAllowlist() []string {
+	out := make([]string, len(agentEnvRuntimeAllowlist))
+	copy(out, agentEnvRuntimeAllowlist)
+	return out
+}
+
+// FilterEnvToAllowlist returns only entries from env whose key is in allow.
+func FilterEnvToAllowlist(env []string, allow []string) []string {
+	set := make(map[string]struct{}, len(allow))
+	for _, k := range allow {
+		set[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		k, _, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		if _, keep := set[k]; keep {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// BuildAgentEnv constructs the environment for an agent data-plane subprocess.
+//
+// base is intended to be the filtered supervisor environment (typically
+// FilterEnvToAllowlist(os.Environ(), agentEnvRuntimeAllowlist)) — NEVER raw
+// os.Environ(), which is the root cause of control-plane leakage. providerEnv
+// carries the agent's data-plane credentials (API keys, base URLs) the agent
+// must keep. sessionEnv carries per-session overrides.
+//
+// The control-plane deny list (CCCODE_*, OPENCODE_SERVER_*, CLAUDECODE) is
+// applied unconditionally to base AND to providerEnv/sessionEnv, then applied a
+// second time after merge as belt-and-braces (in case an extra layer smuggles a
+// key in). Callers that still need a run_as_user isolation allowlist should run
+// FilterEnvForSpawn(BuildAgentEnv(...), spawnOpts) afterwards.
+func BuildAgentEnv(base, providerEnv, sessionEnv []string) []string {
+	base = stripControlPlaneEnv(base)
+	providerEnv = stripControlPlaneEnv(providerEnv)
+	sessionEnv = stripControlPlaneEnv(sessionEnv)
+	merged := MergeEnv(base, providerEnv)
+	merged = MergeEnv(merged, sessionEnv)
+	return stripControlPlaneEnv(merged)
+}
+
 // CheckAllowFrom logs a security warning at startup when allow_from is not
 // configured (defaults to permit-all). Platforms should call this during init.
 func CheckAllowFrom(platform, allowFrom string) {

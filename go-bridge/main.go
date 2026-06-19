@@ -61,7 +61,12 @@ func Main() {
 		fmt.Println(runtimeVersionString())
 		return
 	}
-	clearOpenCodeServerAuthEnv()
+	// Strip control-plane secrets from the go-bridge process's own environment
+	// right after they are parsed. This prevents any future fork done by the
+	// bridge itself (including helper goroutines that call os.Environ()) from
+	// re-inheriting them. The authoritative fix for agent subprocesses is
+	// core.BuildAgentEnv; this is defense-in-depth on the supervisor side.
+	clearControlPlaneEnv()
 
 	// logDirPath 保留供未来日志重定向使用
 	_ = logDirPath
@@ -81,7 +86,7 @@ func Main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	handlers := NewHandlers()
+	handlers := NewHandlersWithContext(ctx)
 	if *dataDirPath != "" {
 		handlers.SetTranscriptIndexBaseDir(*dataDirPath + string(filepath.Separator) + "transcript-index")
 	}
@@ -143,6 +148,7 @@ func Main() {
 		os.Exit(1)
 	}
 
+	handlers.Start(ctx) // T09: 显式启动 observation lease loop（构造函数不再自动起 goroutine）
 	handlers.StartCleanupLoop(60 * time.Second)
 	var dataDir *DataDir
 	if *dataDirPath != "" {
@@ -369,16 +375,43 @@ func Main() {
 	}
 
 	// 统一关停路径，供 SIGTERM 和管理 API /internal/shutdown 共用
+	// 顺序（T02）：先停接收新 RPC（HTTP Server.Shutdown，graceful）
+	//  → handlers.Shutdown（关闭 active session/agent 子进程，进程组回收）
+	//  → 广播 shutdown / 关闭 active WS 连接（server.CloseAllConnections）
+	//  → relayBridgeClient.Close() + relay/tls/mgmt Server.Shutdown
 	shutdown := func() {
 		cancel()
+		slog.Info("go-bridge: shutting down")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+
+		// 1. Stop accepting new RPC on the bridge HTTP server (graceful).
+		httpShutdownDone := make(chan struct{})
+		go func() {
+			_ = httpServer.Shutdown(shutdownCtx)
+			close(httpShutdownDone)
+		}()
+		select {
+		case <-httpShutdownDone:
+		case <-shutdownCtx.Done():
+		}
+
+		// 2. Close active agent sessions / subprocesses (process-group reaping).
+		//    Bound by shutdownCtx so a wedged agent can't hang shutdown.
+		handlersShutdownCtx, handlersShutdownCancel := context.WithTimeout(shutdownCtx, 8*time.Second)
+		if err := handlers.Shutdown(handlersShutdownCtx); err != nil {
+			slog.Warn("go-bridge: handlers.Shutdown error", "error", err)
+		}
+		handlersShutdownCancel()
+
+		// 3. Broadcast shutdown / close active WS connections.
 		closedConnCount := server.CloseAllConnections("bridge shutting down")
+		slog.Info("go-bridge: closed active websocket connections before shutdown", "count", closedConnCount)
+
+		// 4. Relay bridge client + relay/tls/mgmt servers.
 		if relayBridgeClient != nil {
 			relayBridgeClient.Close()
 		}
-		slog.Info("go-bridge: closed active websocket connections before shutdown", "count", closedConnCount)
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		_ = httpServer.Shutdown(shutdownCtx)
 		if relayHTTPServer != nil {
 			_ = relayHTTPServer.Shutdown(shutdownCtx)
 		}
@@ -405,10 +438,14 @@ func Main() {
 
 	// 持久化 management token — 必须在 WriteReadyFrame 之前，
 	// 否则 MacBridge 读到 runtime.json 但 token 文件还不存在。
+	// T06: product 模式（已配置 dataDir + managementToken）下 management-token 写失败须
+	// fail-fast：写 runtime_error.bootstrap_persist_failed 并 exit，绝不发布 ready frame。
 	if *dataDirPath != "" && *managementToken != "" {
 		// 原子写 management-token（P2-5）：避免崩溃留下空/截断文件导致 Mac App 取不到 token。
 		if err := core.AtomicWriteFile(*dataDirPath+"/management-token", []byte(*managementToken), 0o600); err != nil {
-			slog.Error("go-bridge: management-token 写入失败", "error", err)
+			slog.Error("go-bridge: management-token 写入失败，fail-fast 退出", "error", err)
+			WriteErrorFrame(RuntimeErrorBootstrapPersistFailed, "management-token write failed: "+err.Error())
+			os.Exit(1)
 		}
 	}
 
@@ -419,7 +456,13 @@ func Main() {
 			driverList = append(driverList, trimmed)
 		}
 	}
-	WriteReadyFrame(*port, driverList, managementURL, *dataDirPath)
+	// T06: WriteReadyFrame 现在返回 runtime.json 写入错误。product 模式下写失败须 fail-fast，
+	// 不得发布 ready（否则磁盘满/权限错误时 UI 永远未就绪，每 60s 重启）。
+	if err := WriteReadyFrame(*port, driverList, managementURL, *dataDirPath); err != nil {
+		slog.Error("go-bridge: ready frame 持久化失败，fail-fast 退出", "error", err)
+		WriteErrorFrame(RuntimeErrorBootstrapPersistFailed, err.Error())
+		os.Exit(1)
+	}
 
 	slog.Info("go-bridge: listening", "addr", addr, "drivers", *drivers)
 	if err := httpServer.Serve(listener); err != nil && ctx.Err() == nil {
@@ -608,4 +651,30 @@ func normalizeCodexBackend(raw string) string {
 func clearOpenCodeServerAuthEnv() {
 	_ = os.Unsetenv("OPENCODE_SERVER_USERNAME")
 	_ = os.Unsetenv("OPENCODE_SERVER_PASSWORD")
+}
+
+// clearControlPlaneEnv unsets go-bridge's control-plane secrets from the
+// process environment after they have been parsed. Subsumes the legacy
+// clearOpenCodeServerAuthEnv. The authoritative protection for agent
+// subprocesses is core.BuildAgentEnv (deny-list + allowlist); this guard
+// stops the supervisor itself from re-leaking via subsequent os.Environ().
+func clearControlPlaneEnv() {
+	for _, k := range []string{
+		"CCCODE_MANAGEMENT_TOKEN",
+		"CCCODE_RELAY_CREDENTIAL",
+		"CCCODE_RELAY_ROUTE_ID",
+		"CCCODE_RELAY_ENDPOINT",
+		"OPENCODE_SERVER_USERNAME",
+		"OPENCODE_SERVER_PASSWORD",
+		// Clear all other CCCODE_* control-plane vars defensively (dev flags,
+		// VPS creds, etc.). Keep the allowlisted runtime vars only if needed.
+	} {
+		_ = os.Unsetenv(k)
+	}
+	// Sweep remaining CCCODE_* vars (e.g. CCCODE_DEV_INSECURE_WS, VPS creds).
+	for _, e := range os.Environ() {
+		if k, _, ok := strings.Cut(e, "="); ok && strings.HasPrefix(k, "CCCODE_") {
+			_ = os.Unsetenv(k)
+		}
+	}
 }

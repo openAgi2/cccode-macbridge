@@ -77,9 +77,17 @@ func validateRunAsUser(prefix, name string) error {
 }
 
 // configMu serializes read-modify-write cycles to prevent lost updates.
+//
+// Deprecated: this is a package-level global that makes config state implicit
+// and hard to test in isolation (T10 god-object minimal governance). New code
+// should use ConfigRepository, which holds its own path/mutex/fs. This global is
+// retained so existing callers keep working; do not introduce new direct uses.
 var configMu sync.Mutex
 
 // ConfigPath stores the path to the config file for saving
+//
+// Deprecated: package-level global config path (T10). New code should obtain
+// the path from a ConfigRepository instance instead of mutating this global.
 var ConfigPath string
 
 type Config struct {

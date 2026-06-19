@@ -426,9 +426,13 @@ func (a *Agent) storePersistentModelCache(snapshot opencodeModelDiscoverySnapsho
 func (a *Agent) discoverModelsWithSnapshot(ctx context.Context, snapshot opencodeModelDiscoverySnapshot) []core.ModelOption {
 	c := exec.CommandContext(ctx, snapshot.cmd, "models")
 	c.Dir = snapshot.workDir
-	if len(snapshot.providerEnv) > 0 {
-		c.Env = append(os.Environ(), snapshot.providerEnv...)
-	}
+	// Controlled agent env (deny CCCODE_* control-plane leakage even when
+	// providerEnv is empty).
+	c.Env = core.BuildAgentEnv(
+		core.FilterEnvToAllowlist(os.Environ(), core.AgentEnvRuntimeAllowlist()),
+		snapshot.providerEnv,
+		nil,
+	)
 	out, err := c.Output()
 	if err != nil {
 		slog.Debug("opencode: discoverModels failed", "err", err)
@@ -500,6 +504,9 @@ func (a *Agent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, error)
 	return listOpencodeSessions(a.cmd, a.workDir)
 }
 
+// Stop is a no-op for now. Per-session Close() already reaps each opencode
+// process on shutdown (Handlers.Shutdown → AgentSession.Close).
+// TODO: process-group stop at the Agent level.
 func (a *Agent) Stop() error { return nil }
 
 // DeleteSession implements core.SessionDeleter via `opencode session delete <id>`.

@@ -244,13 +244,18 @@ func (s *appServerSession) connectStdio() error {
 	args := s.commandArgs()
 	cmd := exec.CommandContext(s.ctx, "codex", args...)
 	cmd.Dir = s.workDir
-	env := append([]string(nil), s.extraEnv...)
+	sessionEnv := append([]string(nil), s.extraEnv...)
 	if s.codexHome != "" {
-		env = append(env, "CODEX_HOME="+s.codexHome)
+		sessionEnv = append(sessionEnv, "CODEX_HOME="+s.codexHome)
 	}
-	if len(env) > 0 {
-		cmd.Env = core.MergeEnv(os.Environ(), env)
-	}
+	// Controlled agent env: always set (previously only set when env was
+	// non-empty, which let a subprocess with no extra env inherit the full
+	// supervisor env verbatim — the CCCODE_* control-plane leak).
+	cmd.Env = core.BuildAgentEnv(
+		core.FilterEnvToAllowlist(os.Environ(), core.AgentEnvRuntimeAllowlist()),
+		nil,
+		sessionEnv,
+	)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -725,12 +730,23 @@ func (s *appServerSession) Close() error {
 
 	select {
 	case <-done:
+		// readLoop has exited; safe to close events exactly once.
+		s.closeOnce.Do(func() {
+			close(s.events)
+		})
 	case <-time.After(2 * time.Second):
+		// Do NOT close(s.events) here: a producer goroutine may still be
+		// running and a subsequent emit() would panic on a closed-channel send
+		// (emit's default branch does NOT prevent that panic). We already
+		// killed the process above; defer the events close until wg exits.
+		slog.Debug("codex app-server: close timed out, deferring events close until readLoop exits")
+		s.closeOnce.Do(func() {
+			go func() {
+				<-done
+				close(s.events)
+			}()
+		})
 	}
-
-	s.closeOnce.Do(func() {
-		close(s.events)
-	})
 	return nil
 }
 
@@ -846,7 +862,8 @@ func (s *appServerSession) stderrLoop(r io.Reader) {
 		if line == "" {
 			continue
 		}
-		slog.Debug("codex app-server stderr", "line", line)
+		// Redact before logging: app-server stderr may echo env / tokens.
+		slog.Debug("codex app-server stderr", "line", core.RedactStderr(line))
 	}
 	if err := scanner.Err(); err != nil && s.ctx.Err() == nil {
 		slog.Debug("codex app-server stderr read failed", "error", err)

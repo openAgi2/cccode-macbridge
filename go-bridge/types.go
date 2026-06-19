@@ -309,6 +309,24 @@ func (r *sessionRegistry) forEach(fn func(sessionID string, t *trackedSession)) 
 	}
 }
 
+// drain empties the registry, returning the sessions that were present. Used by
+// Handlers.Shutdown to snapshot-and-clear under the lock before closing each
+// session outside the lock.
+func (r *sessionRegistry) drain() []core.AgentSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var sessions []core.AgentSession
+	for _, t := range r.sessions {
+		if t.session != nil {
+			sessions = append(sessions, t.session)
+		}
+	}
+	for k := range r.sessions {
+		delete(r.sessions, k)
+	}
+	return sessions
+}
+
 func (r *sessionRegistry) directoryForSession(sessionID string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
