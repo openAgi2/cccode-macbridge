@@ -181,6 +181,8 @@ func (c *RelayBridgeClient) closeConn() {
 		if c.handlers != nil {
 			c.handlers.broadcaster.UnsubscribeAll(rc)
 		}
+		// 场景4：同步从 registry 注销。
+		globalDeviceConnRegistry.Unregister(deviceID, rc)
 		rc.Close()
 		delete(c.devices, deviceID)
 	}
@@ -221,6 +223,8 @@ func (c *RelayBridgeClient) Close() {
 		if c.handlers != nil {
 			c.handlers.broadcaster.UnsubscribeAll(rc)
 		}
+		// 场景4：同步从 registry 注销。
+		globalDeviceConnRegistry.Unregister(deviceID, rc)
 		rc.Close()
 		delete(c.devices, deviceID)
 	}
@@ -372,6 +376,8 @@ func (c *RelayBridgeClient) pruneDeadDevice(rc *RelayDeviceConn, idle time.Durat
 	if c.handlers != nil {
 		c.handlers.broadcaster.UnsubscribeAll(rc)
 	}
+	// 场景4：同步从 registry 注销，避免 revoke 时对已关闭连接发事件。
+	globalDeviceConnRegistry.Unregister(rc.deviceID, rc)
 	rc.Close()
 	slog.Info("relay-bridge-client: pruned inactive device connection",
 		"deviceID", safeID(rc.deviceID), "idle", idle)
@@ -490,6 +496,8 @@ func (c *RelayBridgeClient) handleClientHello(hello OnlineClientHello) {
 		if c.handlers != nil {
 			c.handlers.broadcaster.UnsubscribeAll(stale)
 		}
+		// 旧连接也需从 registry 注销，避免 revoke 时对一个已关闭的连接发事件。
+		globalDeviceConnRegistry.Unregister(deviceID, stale)
 		_ = stale.Close()
 	}
 	c.devices[deviceID] = rc
@@ -497,6 +505,10 @@ func (c *RelayBridgeClient) handleClientHello(hello OnlineClientHello) {
 
 	// 注册到 Broadcaster
 	c.handlers.broadcaster.RegisterConn(rc)
+
+	// 场景4 修复：relay 连接也注册到 DeviceConnRegistry，使 Mac 撤销授权时
+	// 能向 relay 连接下发 device_revoked 事件并断开（此前仅 direct 路径注册）。
+	globalDeviceConnRegistry.Register(deviceID, rc)
 
 	// 清理握手敏感数据
 	hs.Destroy()

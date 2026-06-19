@@ -8,6 +8,19 @@
 
 ## [Unreleased]
 
+### 2026-06-19 — 修复撤销授权对 relay 连接不生效（安全）
+
+**问题**：在管理 UI 撤销某台 iPhone 的设备授权后，若该 iPhone 走 relay 加密通道连接（默认推荐的远程路径），撤销不会即时生效——iOS 仍能继续访问 Bridge、拉取会话内容，只有杀 App 重启后才进入扫码页。
+
+**根因**：`DeviceConnRegistry`（撤销时负责下发 `device_revoked` 事件并断开连接的注册表）此前只在 direct 直连路径（`server.go`）注册连接，relay 路径的 `RelayDeviceConn` 从未注册进去。撤销授权调用 `DisconnectDevice(deviceID)` 时在注册表里找不到 relay 连接，既不发事件也不断开。
+
+**改动**：
+- `DeviceConnRegistry` 的连接存储从 `[]*Conn` 改为 `[]Connection`（接口），让 direct 与 relay 两种连接类型都能注册。
+- relay 连接在认证成功后注册到注册表；在 stale 清理、心跳半开清理（`pruneDeadDevice`）、`closeConn`、`Close` 四处连接移除点同步注销，避免撤销时对已关闭连接发事件。
+- `DisconnectDevice` 在下发 `device_revoked` 事件后补 `conn.Close()`，确保即使客户端未及时处理事件，连接也被强制断开（此前 direct 路径仅发事件不 Close）。
+
+**提升**：撤销授权对 direct 与 relay 两条路径行为一致、即时生效。新增 `device_conn_registry_test.go` 覆盖接口化存储、多连接撤销、注销隔离（相关测试 3/3 通过）。
+
 ### 2026-06-19 — Relay 凭据迁出钥匙串，消除重装后授权弹窗
 
 **问题**：每次重装 MacBridge 后打开 App，macOS 弹出「CCCode Bridge 想要使用你储存在钥匙串的机密信息」并要求输入登录密码。根因是 App 走 ad-hoc 签名，钥匙串按代码签名 / Team ID 授权访问，重装后 Team ID 变化即判定为陌生应用、触发授权弹窗。这对「下载即用」的普通用户是不可接受的体验。
