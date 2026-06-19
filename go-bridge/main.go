@@ -169,8 +169,10 @@ func Main() {
 
 	// 自动检测 Tailscale IP 作为独立远程候选，不覆盖手动配置的 FRP/VPS URL。
 	// 决策逻辑见 resolveTailscaleRemote：产品模式 TLS 不可用不降级为 ws://（P1-4 fail-closed）。
-	tsDecision := resolveTailscaleRemote(detectTailscaleIP(), *tlsPort, *port, *devInsecureWS)
+	// T00: 传入 dataDir 使证书持久化、派生 SPKI pin；dataDir 在 product 模式必非 nil。
+	tsDecision := resolveTailscaleRemote(detectTailscaleIP(), *tlsPort, *port, *devInsecureWS, dataDir)
 	tlsCert := tsDecision.tlsCert
+	tlsPin := tsDecision.tlsPin
 	tailscaleURL := tsDecision.tailscaleURL
 	if tailscaleURL != "" {
 		slog.Info("go-bridge: Tailscale 远程候选已发布", "url", tailscaleURL)
@@ -218,6 +220,7 @@ func Main() {
 				OpenCodePass:      *ocPass,
 				CodexAppServerURL: *codexAppServerURL,
 			},
+			TLSPin: tlsPin,
 		}
 		mgmtSrv = NewManagementServer(mgmtCfg)
 

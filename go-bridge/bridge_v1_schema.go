@@ -41,11 +41,25 @@ type BridgeV1BridgeProfile struct {
 }
 
 type BridgeV1SecurityProfile struct {
-	Level            string `json:"level"`
-	Scheme           string `json:"scheme,omitempty"`
-	HostCategory     string `json:"hostCategory,omitempty"`
-	IsTailscaleCGNAT bool   `json:"isTailscaleCGNAT,omitempty"`
-	IsPublicWS       bool   `json:"isPublicWS,omitempty"`
+	Level            string         `json:"level"`
+	Scheme           string         `json:"scheme,omitempty"`
+	HostCategory     string         `json:"hostCategory,omitempty"`
+	IsTailscaleCGNAT bool           `json:"isTailscaleCGNAT,omitempty"`
+	IsPublicWS       bool           `json:"isPublicWS,omitempty"`
+	TLSPin           *BridgeV1TLSPin `json:"tlsPin,omitempty"`
+}
+
+// BridgeV1TLSPin 是已认证的 Bridge TLS pin 契约，对应 iOS 端 BridgeTLSPin。
+//
+// 由 MacBridge 在已认证信道（pairing_complete / hello_ack）下发给 iOS，
+// iOS 据此对 Tailscale wss:// 自签名证书做 SPKI pinning（relay 路径不经此 pin）。
+// 字段语义见 docs/2026-06-19-t00-tlspin-owner-unblock-spec.md §2。
+type BridgeV1TLSPin struct {
+	Algorithm                string `json:"algorithm"`                // 固定 "sha256-spki"
+	Value                    string `json:"value"`                    // base64(SHA256(SPKI))
+	Generation               uint64 `json:"generation"`               // 单调递增；回退 iOS 拒绝
+	PreviousValue            string `json:"previousValue,omitempty"`  // 轮换窗口内的旧 pin
+	PreviousValidUntilMillis int64  `json:"previousValidUntil,omitempty"` // Unix epoch ms；窗口结束后 iOS 拒绝 previous
 }
 
 type BridgeV1Capabilities struct {

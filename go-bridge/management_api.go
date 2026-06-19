@@ -44,6 +44,7 @@ type ManagementConfig struct {
 	Agents           map[string]core.Agent
 	CodexBackendMode string
 	DetectionCfg     *AgentDetectionConfig
+	TLSPin           *BridgeV1TLSPin
 }
 
 // ── 管理 API 服务器 ─────────────────────────────────────────────────────────
@@ -552,6 +553,7 @@ func (s *ManagementServer) handlePairingApprove(w http.ResponseWriter, r *http.R
 				LocalURL:    s.cfg.LocalURL,
 				RemoteURL:   s.remoteURL(),
 				RemoteURLs:  s.remoteURLs(),
+				TLSPin:      s.cfg.TLSPin,
 			},
 		}
 		globalPairingRegistry.NotifyComplete(pairID, push)

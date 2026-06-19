@@ -29,11 +29,12 @@ type PairingCompleteDevice struct {
 }
 
 type PairingCompleteBridge struct {
-	BridgeID    string   `json:"bridgeId"`
-	DisplayName string   `json:"displayName"`
-	LocalURL    string   `json:"localURL"`
-	RemoteURL   *string  `json:"remoteURL,omitempty"`
-	RemoteURLs  []string `json:"remoteURLs,omitempty"`
+	BridgeID    string           `json:"bridgeId"`
+	DisplayName string           `json:"displayName"`
+	LocalURL    string           `json:"localURL"`
+	RemoteURL   *string          `json:"remoteURL,omitempty"`
+	RemoteURLs  []string         `json:"remoteURLs,omitempty"`
+	TLSPin      *BridgeV1TLSPin  `json:"tlsPin,omitempty"`
 }
 
 // PairingPendingConn tracks an iOS device waiting for pairing_complete.

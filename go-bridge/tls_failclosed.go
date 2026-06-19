@@ -10,6 +10,7 @@ import (
 type tailscaleRemoteDecision struct {
 	tailscaleURL string
 	tlsCert      *tls.Certificate
+	tlsPin       *BridgeV1TLSPin
 }
 
 // resolveTailscaleRemote 决定 Tailscale 远程候选 URL 与证书（P1-4 fail-closed）。
@@ -23,16 +24,21 @@ type tailscaleRemoteDecision struct {
 //
 // 这是 P1-4 的核心：产品模式下 TLS 失败不得自动降级为明文 ws://，避免在链路上
 // 暴露 bearer token、RPC 与 agent 输出，也不把真实安全故障表现为“仍可用”。
-func resolveTailscaleRemote(tsIP string, tlsPort, port int, devInsecureWS bool) tailscaleRemoteDecision {
+//
+// dataDir 非 nil 时，证书经 LoadOrCreateTLSCert 持久化（跨重启稳定，派生 SPKI pin），
+// 这是 T00 TLS pin 契约的来源；dataDir 为 nil（开发/测试）退化为一次性 generateSelfSignedCert，
+// 不派生 pin（pin 为 nil，iOS 端只允许系统 trust）。
+func resolveTailscaleRemote(tsIP string, tlsPort, port int, devInsecureWS bool, dataDir *DataDir) tailscaleRemoteDecision {
 	if tsIP == "" {
 		return tailscaleRemoteDecision{}
 	}
 	if tlsPort > 0 {
-		cert, err := generateSelfSignedCert(tsIP)
+		cert, pin, err := LoadOrCreateTLSCert(dataDir, tsIP)
 		if err == nil {
 			return tailscaleRemoteDecision{
 				tailscaleURL: fmt.Sprintf("wss://%s:%d/bridge", tsIP, tlsPort),
 				tlsCert:      cert,
+				tlsPin:       pin,
 			}
 		}
 		if !devInsecureWS {
