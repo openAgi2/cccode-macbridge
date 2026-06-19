@@ -300,6 +300,12 @@ enum L10n {
     static var remoteRelayFailed: String { tr("remote_relay_failed") }
     static var remoteTailscale: String { tr("remote_tailscale") }
     static var remoteVPSPlaceholder: String { tr("remote_vps_placeholder") }
+    static var remotePublishInPairing: String { tr("remote_publish_in_pairing") }
+    static var remoteLANHint: String { tr("remote_lan_hint") }
+    static var remoteUnencryptedWarning: String { tr("remote_unencrypted_warning") }
+    static var remoteNoTailscaleIP: String { tr("remote_no_tailscale_ip") }
+    static var remoteTailscaleIPDetected: String { tr("remote_tailscale_ip_detected") }
+    static var remoteRefreshFailed: String { tr("remote_refresh_failed") }
 
     // MARK: - Settings messages
 
@@ -549,6 +555,12 @@ enum L10n {
             "remote_relay_failed": "Relay configuration failed: %@",
             "remote_tailscale": "Tailscale",
             "remote_vps_placeholder": "wss://bridge.example.com/bridge",
+            "remote_publish_in_pairing": "Include in new pairing",
+            "remote_lan_hint": "Local network address, copy for diagnostics or manual connection. Use only in trusted LAN.",
+            "remote_unencrypted_warning": "Warning: Unencrypted connection detected. Data sent over public networks without encryption is unsafe.",
+            "remote_no_tailscale_ip": "No available Tailscale address detected",
+            "remote_tailscale_ip_detected": "Tailscale address detected",
+            "remote_refresh_failed": "Last updated: %@ · Refresh failed",
             "name_updated": "Name updated",
             "save_failed": "Save failed: %@",
             "save_failed_http": "Save failed (HTTP %d)",
@@ -789,6 +801,12 @@ enum L10n {
             "remote_relay_failed": "Relay 配置失败：%@",
             "remote_tailscale": "Tailscale",
             "remote_vps_placeholder": "wss://bridge.example.com/bridge",
+            "remote_publish_in_pairing": "配对时提供此连接方式",
+            "remote_lan_hint": "局域网连接地址，可复制用于诊断或手动连接。仅应在可信局域网内使用。",
+            "remote_unencrypted_warning": "警告：检测到您使用的是未加密的公网连接方式 (ws://)。数据在公共网络传输时存在安全风险，强烈建议使用加密协议。",
+            "remote_no_tailscale_ip": "未检测到可用的 Tailscale 地址",
+            "remote_tailscale_ip_detected": "已检测到 Tailscale 地址",
+            "remote_refresh_failed": "上次更新时间：%@ · 刷新未成功",
             "name_updated": "名称已更新",
             "save_failed": "保存失败：%@",
             "save_failed_http": "保存失败 (HTTP %d)",
