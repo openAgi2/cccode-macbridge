@@ -990,12 +990,12 @@ struct NavigationRow: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(isSelected ? .white : .accentColor)
+                    .foregroundColor(isSelected ? .primary : .accentColor)
                     .frame(width: 18, height: 18)
                     .padding(4)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(isSelected ? Color.white.opacity(0.15) : Color.accentColor.opacity(0.1))
+                            .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
                     )
                 
                 VStack(alignment: .leading, spacing: 2) {
@@ -1003,7 +1003,7 @@ struct NavigationRow: View {
                         Text(title)
                             .font(.body)
                             .fontWeight(.medium)
-                            .foregroundColor(isSelected ? .white : .primary)
+                            .foregroundColor(.primary)
                         
                         Spacer()
                         
@@ -1021,18 +1021,18 @@ struct NavigationRow: View {
                     
                     Text(statusText)
                         .font(.caption)
-                        .foregroundColor(isSelected ? Color.white.opacity(0.7) : .secondary)
+                        .foregroundColor(.secondary)
                         .lineLimit(1)
                     
                     if let subtitle {
                         Text(subtitle)
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(isSelected ? Color.white.opacity(0.9) : .accentColor)
+                            .foregroundColor(isSelected ? .primary : .accentColor)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background(
                                 RoundedRectangle(cornerRadius: 4)
-                                    .fill(isSelected ? Color.white.opacity(0.2) : Color.accentColor.opacity(0.12))
+                                    .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.12))
                             )
                             .padding(.top, 2)
                     }
@@ -1046,7 +1046,7 @@ struct NavigationRow: View {
         .buttonStyle(.plain)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accentColor : (isHovering ? Color.secondary.opacity(0.1) : Color.clear))
+                .fill(isSelected ? Color.accentColor.opacity(0.18) : (isHovering ? Color.secondary.opacity(0.1) : Color.clear))
         )
         .onHover { hover in
             isHovering = hover
