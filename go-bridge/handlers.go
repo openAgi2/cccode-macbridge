@@ -710,6 +710,8 @@ func (h *Handlers) dispatchRPC(conn Connection, msg WireMessage, agent core.Agen
 		h.handleFetchContentChunk(conn, msg)
 	case "read_file":
 		h.handleReadFile(conn, msg)
+	case "list_directory":
+		h.handleListDirectory(conn, msg)
 	case "rename_session":
 		h.handleRenameSession(conn, msg, agent)
 	case "share_session":
@@ -3387,6 +3389,74 @@ func (h *Handlers) handleReadFile(conn Connection, msg WireMessage) {
 		"totalLines": totalLines,
 		"truncated":  truncated,
 	}, nil)
+}
+
+// ── list_directory: iOS 端远程选择/浏览 Mac 本地文件夹 ──────────────────────────────
+
+func (h *Handlers) handleListDirectory(conn Connection, msg WireMessage) {
+	var params struct {
+		Path string `json:"path"`
+	}
+	if msg.Params != nil {
+		json.Unmarshal(msg.Params, &params)
+	}
+
+	resolvedPath, err := expandPath(params.Path)
+	if err != nil {
+		conn.SendResult(msg.RequestID, nil, &WireError{Code: "invalid_path", Message: err.Error()})
+		return
+	}
+
+	entries, err := os.ReadDir(resolvedPath)
+	if err != nil {
+		conn.SendResult(msg.RequestID, nil, &WireError{Code: "read_failed", Message: err.Error()})
+		return
+	}
+
+	type directoryItem struct {
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		IsDirectory bool   `json:"isDirectory"`
+	}
+
+	var items []directoryItem
+	for _, entry := range entries {
+		name := entry.Name()
+		// 过滤隐藏文件/文件夹 (以 . 开头)
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		itemPath := filepath.Join(resolvedPath, name)
+		items = append(items, directoryItem{
+			Name:        name,
+			Path:        itemPath,
+			IsDirectory: entry.IsDir(),
+		})
+
+		// 限制单次返回条数，避免大文件夹内存爆满
+		if len(items) >= 1000 {
+			break
+		}
+	}
+
+	conn.SendResult(msg.RequestID, map[string]interface{}{
+		"currentPath": resolvedPath,
+		"items":       items,
+	}, nil)
+}
+
+func expandPath(path string) (string, error) {
+	if path == "" || path == "~" {
+		return os.UserHomeDir()
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, path[2:]), nil
+	}
+	return filepath.Abs(filepath.Clean(path))
 }
 
 func (h *Handlers) authorizedReadFileRoot(msg WireMessage, requestedDir, paramsSessionID string) (string, error) {

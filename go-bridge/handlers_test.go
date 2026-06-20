@@ -2822,3 +2822,115 @@ func TestReadFileAcceptsSubdirectoryWithinWorkspace(t *testing.T) {
 		})
 	}
 }
+
+func TestListDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	
+	// Create some dirs and files
+	dir1 := filepath.Join(workspace, "dir1")
+	dir2 := filepath.Join(workspace, "dir2")
+	hiddenDir := filepath.Join(workspace, ".hidden_dir")
+	file1 := filepath.Join(workspace, "file1.txt")
+	
+	if err := os.Mkdir(dir1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file1, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	
+	h := newTestHandlers(t)
+	conn := &readFileCaptureConn{}
+	
+	// Test listing the workspace
+	params, _ := json.Marshal(map[string]interface{}{"path": workspace})
+	h.handleListDirectory(conn, WireMessage{
+		RequestID: "req_list",
+		Params:    params,
+	})
+	
+	if conn.err != nil {
+		t.Fatalf("expected nil error, got %v", conn.err)
+	}
+	
+	resMap, ok := conn.data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map[string]interface{}, got %T", conn.data)
+	}
+	
+	currentPath := resMap["currentPath"].(string)
+	if currentPath != workspace {
+		t.Errorf("expected currentPath %s, got %s", workspace, currentPath)
+	}
+	
+	itemsRaw := resMap["items"]
+	itemsJSON, _ := json.Marshal(itemsRaw)
+	
+	type directoryItem struct {
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		IsDirectory bool   `json:"isDirectory"`
+	}
+	var items []directoryItem
+	json.Unmarshal(itemsJSON, &items)
+	
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d: %#v", len(items), items)
+	}
+	
+	hasDir1 := false
+	hasDir2 := false
+	hasFile1 := false
+	
+	for _, item := range items {
+		if strings.HasPrefix(item.Name, ".") {
+			t.Errorf("should not contain hidden item: %s", item.Name)
+		}
+		switch item.Name {
+		case "dir1":
+			hasDir1 = true
+			if !item.IsDirectory {
+				t.Error("dir1 should be a directory")
+			}
+		case "dir2":
+			hasDir2 = true
+			if !item.IsDirectory {
+				t.Error("dir2 should be a directory")
+			}
+		case "file1.txt":
+			hasFile1 = true
+			if item.IsDirectory {
+				t.Error("file1.txt should not be a directory")
+			}
+		}
+	}
+	
+	if !hasDir1 || !hasDir2 || !hasFile1 {
+		t.Errorf("missing expected items, got: %#v", items)
+	}
+
+	// Test expandPath helper
+	homeDir, _ := os.UserHomeDir()
+	res, err := expandPath("~")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != homeDir {
+		t.Errorf("expected ~ to resolve to %s, got %s", homeDir, res)
+	}
+
+	res2, err := expandPath("~/foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2 != filepath.Join(homeDir, "foo") {
+		t.Errorf("expected ~/foo to resolve to %s, got %s", filepath.Join(homeDir, "foo"), res2)
+	}
+}
+
