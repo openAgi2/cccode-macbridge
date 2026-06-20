@@ -5,7 +5,9 @@ struct PairingView: View {
     @ObservedObject var viewModel: PairingViewModel
     @AppStorage("bridgeDisplayName") private var bridgeDisplayName = ""
     @State private var copiedCode = false
+    @State private var copiedLink = false
     @State private var isDetailsExpanded = false
+
 
     private struct PairingCandidate: Identifiable {
         let id: String
@@ -88,11 +90,30 @@ struct PairingView: View {
     private func qrSection(payload: String) -> some View {
         VStack(alignment: .center, spacing: 12) {
             qrImage(payload: payload)
+            
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(payload, forType: .string)
+                copiedLink = true
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    copiedLink = false
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: copiedLink ? "checkmark" : "doc.on.clipboard")
+                    Text(copiedLink ? L10n.pairingLinkCopied : L10n.copyPairingLink)
+                }
+            }
+            .buttonStyle(.bordered)
+            .help(copiedLink ? L10n.pairingLinkCopied : L10n.copyPairingLink)
+            
             Button(L10n.back) {
                 viewModel.reset()
             }
         }
     }
+
 
     private func qrImage(payload: String) -> some View {
         makeQRImage(payload: payload)

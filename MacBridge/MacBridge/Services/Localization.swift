@@ -178,6 +178,9 @@ enum L10n {
     static var pairingLAN: String { tr("pairing_lan") }
     static var pairingRelay: String { tr("pairing_relay") }
     static var pairingAdvancedPath: String { tr("pairing_advanced_path") }
+    static var copyPairingLink: String { tr("copy_pairing_link") }
+    static var pairingLinkCopied: String { tr("pairing_link_copied") }
+
 
     // MARK: - Devices
 
@@ -432,7 +435,7 @@ enum L10n {
             "security_hint_3": "Pairing codes expire after a few minutes.",
             "bridge_label": "Bridge: %@",
             "device_request": "Device Request",
-            "approve": "Approve",
+            "approve": "Authorize Mobile Device",
             "reject": "Reject",
             "device_paired_successfully": "Device paired successfully",
             "pair_another_device": "Pair Another Device",
@@ -458,6 +461,9 @@ enum L10n {
             "pairing_lan": "Local Network",
             "pairing_relay": "Encrypted Relay",
             "pairing_advanced_path": "Advanced Connection",
+            "copy_pairing_link": "Copy Pairing Link",
+            "pairing_link_copied": "Copied",
+
             "authorized_devices": "Authorized Devices",
             "no_authorized_devices": "No authorized devices. Use the pairing section above to add one.",
             "remove": "Remove",
@@ -685,7 +691,7 @@ enum L10n {
             "security_hint_3": "配对码几分钟后会过期。",
             "bridge_label": "Bridge：%@",
             "device_request": "设备请求",
-            "approve": "批准",
+            "approve": "授权移动端设备",
             "reject": "拒绝",
             "device_paired_successfully": "设备配对成功",
             "pair_another_device": "配对另一个设备",
@@ -711,6 +717,9 @@ enum L10n {
             "pairing_lan": "局域网",
             "pairing_relay": "加密 Relay",
             "pairing_advanced_path": "高级连接",
+            "copy_pairing_link": "复制配对链接",
+            "pairing_link_copied": "已复制",
+
             "authorized_devices": "已授权设备",
             "no_authorized_devices": "暂无已授权设备。使用上方的配对区域添加设备。",
             "remove": "移除",
