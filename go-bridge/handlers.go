@@ -827,6 +827,19 @@ func (h *Handlers) handleOpenCodeRPC(conn Connection, msg WireMessage) {
 	}
 }
 
+func (h *Handlers) enrichSessionState(mapped map[string]interface{}) map[string]interface{} {
+	if mapped == nil {
+		return nil
+	}
+	sessionID, _ := mapped["id"].(string)
+	if sessionID != "" {
+		if ts, ok := h.sessions.get(sessionID); ok {
+			mapped["runtimeState"] = string(ts.state)
+		}
+	}
+	return mapped
+}
+
 // ── ocProxy: list_sessions ────────────────────────────────────────────────────
 
 func (h *Handlers) ocHandleListSessions(conn Connection, msg WireMessage, dir string) {
@@ -847,7 +860,7 @@ func (h *Handlers) ocHandleListSessions(conn Connection, msg WireMessage, dir st
 		if rootsOnly && parentID != "" {
 			continue
 		}
-		result = append(result, mapSession(s))
+		result = append(result, h.enrichSessionState(mapSession(s)))
 	}
 	conn.SendResult(msg.RequestID, map[string]interface{}{"sessions": result}, nil)
 }
@@ -866,7 +879,7 @@ func (h *Handlers) ocHandleGetSession(conn Connection, msg WireMessage, dir stri
 		conn.SendResult(msg.RequestID, nil, &WireError{Code: "get_failed", Message: err.Error()})
 		return
 	}
-	conn.SendResult(msg.RequestID, map[string]interface{}{"session": mapSession(s)}, nil)
+	conn.SendResult(msg.RequestID, map[string]interface{}{"session": h.enrichSessionState(mapSession(s))}, nil)
 }
 
 // ── ocProxy: get_session_messages ─────────────────────────────────────────────
@@ -948,7 +961,7 @@ func (h *Handlers) ocHandleCreateSession(conn Connection, msg WireMessage, dir s
 		return
 	}
 
-	session := mapSession(s)
+	session := h.enrichSessionState(mapSession(s))
 	conn.SendResult(msg.RequestID, session, nil)
 }
 
@@ -967,7 +980,7 @@ func (h *Handlers) ocHandleResumeSession(conn Connection, msg WireMessage, dir s
 		return
 	}
 
-	session := mapSession(s)
+	session := h.enrichSessionState(mapSession(s))
 	conn.SendResult(msg.RequestID, session, nil)
 }
 
