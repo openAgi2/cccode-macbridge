@@ -1883,7 +1883,334 @@ func (h *Handlers) startRelayIfNotRunning(sessionID string, sess core.AgentSessi
 	}
 }
 
-// NOTE: 对于 Claude Code (backendID == "claude")，因为其为长生命周期的持久 CLI 进程，
+// startClaudeSessionFileRelay 为没有 AgentSession 的 Claude Desktop session
+// 启动基于 transcript 文件监视的事件转发。当 iOS 调用 resume_session 或
+// get_session_messages 打开一个已在外部运行/已完成的 session 时，
+// handleResumeSession 不创建 AgentSession（设计如此），导致 relayEvents 永远
+// 不会启动。本函数通过轮询 .jsonl 文件变化来代替内存事件通道，向 iOS 广播
+// turn_started / turn_completed / session_state_changed 事件。
+func (h *Handlers) startClaudeSessionFileRelay(sessionID string, conn Connection, backendID string) {
+	if backendID != "claude" && backendID != "claudecode" {
+		return
+	}
+	h.mu.Lock()
+	running := h.relayRunning[sessionID]
+	if !running {
+		h.relayRunning[sessionID] = true
+	}
+	h.mu.Unlock()
+	if running {
+		return // 已有标准 relay 或文件 relay 在运行
+	}
+
+	go h.claudeSessionFileRelayLoop(sessionID, conn, backendID)
+}
+
+func (h *Handlers) claudeSessionFileRelayLoop(sessionID string, conn Connection, backendID string) {
+	defer func() {
+		h.mu.Lock()
+		delete(h.relayRunning, sessionID)
+		h.mu.Unlock()
+		slog.Info("go-bridge: claudeSessionFileRelay exited", "sessionID", sessionID)
+	}()
+
+	_, sessPath := findClaudeSessionFile(sessionID, "")
+	if sessPath == "" {
+		slog.Debug("go-bridge: claudeSessionFileRelay no transcript file found", "sessionID", sessionID)
+		return
+	}
+	slog.Info("go-bridge: claudeSessionFileRelay started", "sessionID", sessionID, "path", sessPath)
+
+	// 读取当前文件大小作为初始偏移，只检测新增内容。
+	offset := func() int64 {
+		info, err := os.Stat(sessPath)
+		if err != nil {
+			return 0
+		}
+		return info.Size()
+	}()
+
+	// 检查 transcript 当前最后一条消息，广播当前状态。
+	// 如果最后一条是已完成的 assistant，广播 idle 状态。
+	if state := h.detectClaudeTranscriptState(sessPath); state == "idle" {
+		h.mu.Lock()
+		dir := h.sessions.directoryForSession(sessionID)
+		h.mu.Unlock()
+		h.broadcaster.Send(BroadcastEvent{
+			BackendID: backendID,
+			SessionID: sessionID,
+			Directory: dir,
+			Message: EventMessage{
+				Type:      "event",
+				SessionID: sessionID,
+				BackendID: backendID,
+				Event:     "session_state_changed",
+				Data:      map[string]interface{}{"state": "idle"},
+			},
+		})
+		h.sessions.markIdle(sessionID)
+		slog.Info("go-bridge: claudeSessionFileRelay initial state is idle, broadcasting", "sessionID", sessionID)
+		// 文件 relay 完成初始广播后退出——session 已结束，无需继续监视。
+		return
+	}
+
+	// Session 仍在运行中，开始轮询监视新内容。
+	const pollInterval = 3 * time.Second
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	// 广播 turn_started（session 正在执行中）。
+	h.mu.Lock()
+	dir := h.sessions.directoryForSession(sessionID)
+	h.mu.Unlock()
+	h.sessions.markRunning(sessionID)
+	h.broadcaster.Send(BroadcastEvent{
+		BackendID: backendID,
+		SessionID: sessionID,
+		Directory: dir,
+		Message: EventMessage{
+			Type:      "event",
+			SessionID: sessionID,
+			BackendID: backendID,
+			Event:     "session_state_changed",
+			Data:      map[string]interface{}{"state": "running"},
+		},
+	})
+
+	for range ticker.C {
+		info, err := os.Stat(sessPath)
+		if err != nil {
+			continue
+		}
+		newSize := info.Size()
+		if newSize <= offset {
+			// 文件没有增长，可能被截断重写（truncate）。
+			if newSize < offset {
+				offset = 0
+			}
+			continue
+		}
+
+		// 读取新增内容。
+		f, err := os.Open(sessPath)
+		if err != nil {
+			continue
+		}
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			continue
+		}
+
+		lastEntryType := ""
+		lastStopReason := ""
+		lastUserIsInterrupt := false
+		hasNewContent := false
+
+		scanner := bufio.NewScanner(f)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024*16)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+			var entry struct {
+				Type    string `json:"type"`
+				Message *struct {
+					Role       string          `json:"role"`
+					StopReason string          `json:"stop_reason"`
+					Content    json.RawMessage `json:"content"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal(line, &entry); err != nil {
+				continue
+			}
+			if entry.Message == nil {
+				continue
+			}
+			if entry.Type == "user" {
+				lastEntryType = "user"
+				lastStopReason = ""
+				lastUserIsInterrupt = false
+				// 检查是否是用户中断。
+				var contentBlocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				if err := json.Unmarshal(entry.Message.Content, &contentBlocks); err == nil {
+					for _, b := range contentBlocks {
+						if b.Type == "text" && strings.HasPrefix(strings.TrimSpace(b.Text), "[Request interrupted by user") {
+							lastUserIsInterrupt = true
+						}
+					}
+				}
+				hasNewContent = true
+			} else if entry.Type == "assistant" {
+				lastEntryType = "assistant"
+				lastStopReason = entry.Message.StopReason
+				lastUserIsInterrupt = false
+				hasNewContent = true
+			}
+		}
+		f.Close()
+
+		if !hasNewContent {
+			offset = newSize
+			continue
+		}
+
+		offset = newSize
+
+		// 广播事件。
+		if lastEntryType == "user" && !lastUserIsInterrupt {
+			// 用户发送新消息 → turn_started
+			h.sessions.markRunning(sessionID)
+			h.broadcaster.Send(BroadcastEvent{
+				BackendID: backendID,
+				SessionID: sessionID,
+				Directory: dir,
+				Message: EventMessage{
+					Type:      "event",
+					SessionID: sessionID,
+					BackendID: backendID,
+					Event:     "turn_started",
+					Data:      map[string]interface{}{"turnId": ""},
+				},
+			})
+		} else if lastUserIsInterrupt {
+			// 用户中断 → turn_completed(idle)
+			h.sessions.markIdle(sessionID)
+			h.broadcaster.Send(BroadcastEvent{
+				BackendID: backendID,
+				SessionID: sessionID,
+				Directory: dir,
+				Message: EventMessage{
+					Type:      "event",
+					SessionID: sessionID,
+					BackendID: backendID,
+					Event:     "turn_completed",
+					Data:      map[string]interface{}{"done": true, "reason": "user_interrupt"},
+				},
+			})
+			h.broadcaster.Send(BroadcastEvent{
+				BackendID: backendID,
+				SessionID: sessionID,
+				Directory: dir,
+				Message: EventMessage{
+					Type:      "event",
+					SessionID: sessionID,
+					BackendID: backendID,
+					Event:     "session_state_changed",
+					Data:      map[string]interface{}{"state": "idle"},
+				},
+			})
+			// 中断后 session 可能还会被继续，继续监视。
+		} else if lastEntryType == "assistant" {
+			isFinal := lastStopReason == "end_turn" || lastStopReason == "stop_limit" ||
+				lastStopReason == "stop_sequence" || lastStopReason == "max_tokens"
+			if isFinal {
+				// 任务完成 → turn_completed(idle)
+				h.sessions.markIdle(sessionID)
+				h.broadcaster.Send(BroadcastEvent{
+					BackendID: backendID,
+					SessionID: sessionID,
+					Directory: dir,
+					Message: EventMessage{
+						Type:      "event",
+						SessionID: sessionID,
+						BackendID: backendID,
+						Event:     "turn_completed",
+						Data:      map[string]interface{}{"done": true, "reason": "end_turn"},
+					},
+				})
+				h.broadcaster.Send(BroadcastEvent{
+					BackendID: backendID,
+					SessionID: sessionID,
+					Directory: dir,
+					Message: EventMessage{
+						Type:      "event",
+						SessionID: sessionID,
+						BackendID: backendID,
+						Event:     "session_state_changed",
+						Data:      map[string]interface{}{"state": "idle"},
+					},
+				})
+				slog.Info("go-bridge: claudeSessionFileRelay turn completed, exiting", "sessionID", sessionID)
+				return // 任务完成，退出文件监视。
+			}
+			// assistant 消息但不是最终（如 tool_use），继续监视。
+		}
+	}
+}
+
+// detectClaudeTranscriptState 扫描 transcript 文件的最后几条消息，
+// 判定 session 当前是否处于执行中。用于文件 relay 的初始状态检测。
+func (h *Handlers) detectClaudeTranscriptState(sessPath string) string {
+	f, err := os.Open(sessPath)
+	if err != nil {
+		return "unknown"
+	}
+	defer f.Close()
+
+	var lastEntryType, lastStopReason string
+	var lastUserIsInterrupt bool
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024*16)
+	for scanner.Scan() {
+		var entry struct {
+			Type    string `json:"type"`
+			Message *struct {
+				Role       string          `json:"role"`
+				StopReason string          `json:"stop_reason"`
+				Content    json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.Message == nil {
+			continue
+		}
+		if entry.Type == "user" {
+			lastEntryType = "user"
+			lastStopReason = ""
+			lastUserIsInterrupt = false
+			var contentBlocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(entry.Message.Content, &contentBlocks); err == nil {
+				for _, b := range contentBlocks {
+					if b.Type == "text" && strings.HasPrefix(strings.TrimSpace(b.Text), "[Request interrupted by user") {
+						lastUserIsInterrupt = true
+					}
+				}
+			}
+		} else if entry.Type == "assistant" {
+			lastEntryType = "assistant"
+			lastStopReason = entry.Message.StopReason
+			lastUserIsInterrupt = false
+		}
+	}
+
+	if lastUserIsInterrupt {
+		return "idle"
+	}
+	if lastEntryType == "assistant" {
+		isFinal := lastStopReason == "end_turn" || lastStopReason == "stop_limit" ||
+			lastStopReason == "stop_sequence" || lastStopReason == "max_tokens"
+		if isFinal {
+			return "idle"
+		}
+		return "running"
+	}
+	if lastEntryType == "user" {
+		return "running"
+	}
+	return "unknown"
+}
 // 且事件通道没有跨进程共享事件总线，它的 relayEvents goroutine 在完成一轮（EventResult）或空闲时
 // 绝不能退出（通过 continue 忽略）。这也意味着该 goroutine 和底层 session 会常驻在内存中，
 // 其最终生命周期的释放依赖于 session 显式关闭/删除导致 events channel 关闭。这需要注意潜在的泄漏风险。
@@ -2713,6 +3040,9 @@ func (h *Handlers) handleGetSessionMessages(conn Connection, msg WireMessage, ag
 		h.startRelayIfNotRunning(params.SessionID, sess, conn, msg.BackendID)
 	} else {
 		slog.Info("go-bridge: get_session_messages — using process-level passive subscription", "backendID", msg.BackendID, "sessionID", params.SessionID)
+		// 对于没有 AgentSession 的 claudecode session（外部 Desktop 创建），
+		// 启动基于 transcript 文件监视的事件转发。
+		h.startClaudeSessionFileRelay(params.SessionID, conn, msg.BackendID)
 	}
 
 	// list_sessions 在所有项目目录中扫描，返回的每个 session 都附带 directory 字段
@@ -2949,6 +3279,17 @@ func (h *Handlers) handleResumeSession(conn Connection, msg WireMessage, agent c
 	slog.Info("go-bridge: handleResumeSession", "sessionID", params.SessionID, "directory", params.Directory)
 
 	h.subscribeConnToSession(conn, msg, h.resolveSessionIDForActiveSession(params.SessionID))
+
+	// 对于 claudecode session：如果没有活跃 AgentSession（外部 Desktop 创建），
+	// 启动基于 transcript 文件监视的事件转发，使 iOS 能收到 turn_started/turn_completed 等事件。
+	if agent.Name() == "claudecode" {
+		h.mu.Lock()
+		sess, hasSess := h.getSession(params.SessionID)
+		h.mu.Unlock()
+		if !hasSess || sess == nil {
+			h.startClaudeSessionFileRelay(params.SessionID, conn, msg.BackendID)
+		}
+	}
 
 	dir := params.Directory
 	if dir == "" {
