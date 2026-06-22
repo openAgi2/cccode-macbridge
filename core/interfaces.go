@@ -403,3 +403,9 @@ type PermissionModeInfo struct {
 type EventSubscriber interface {
 	Subscribe(ctx context.Context) (<-chan Event, error)
 }
+
+// RunningSessionLister is an optional interface for agents that can detect running sessions from the OS or filesystem.
+type RunningSessionLister interface {
+	GetRunningSessionIDs(ctx context.Context) (map[string]bool, error)
+}
+

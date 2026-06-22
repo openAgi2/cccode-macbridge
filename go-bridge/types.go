@@ -244,6 +244,13 @@ func (r *sessionRegistry) markRunning(sessionID string) {
 	if t, ok := r.sessions[sessionID]; ok {
 		t.state = sessionStateRunning
 		t.lastUsedAt = time.Now()
+	} else {
+		r.sessions[sessionID] = &trackedSession{
+			sessionID:   sessionID,
+			state:       sessionStateRunning,
+			lastUsedAt:  time.Now(),
+			lastEventAt: time.Now(),
+		}
 	}
 }
 
@@ -261,6 +268,13 @@ func (r *sessionRegistry) markIdle(sessionID string) {
 	if t, ok := r.sessions[sessionID]; ok {
 		t.state = sessionStateIdle
 		t.lastEventAt = time.Now()
+	} else {
+		r.sessions[sessionID] = &trackedSession{
+			sessionID:   sessionID,
+			state:       sessionStateIdle,
+			lastUsedAt:  time.Now(),
+			lastEventAt: time.Now(),
+		}
 	}
 }
 

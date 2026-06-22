@@ -484,6 +484,127 @@ func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, erro
 	return sessions, nil
 }
 
+func isSessionExecuting(sessionPath string) bool {
+	f, err := os.Open(sessionPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	var lastMsg struct {
+		Role       string
+		StopReason string
+		Text       string
+	}
+	hasMsg := false
+
+	scanner := bufio.NewScanner(f)
+	// Claude session files can have very long lines (e.g. tool outputs)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024*16) // Up to 16MB per line
+
+	for scanner.Scan() {
+		var entry struct {
+			Type    string                    `json:"type"`
+			Message *transcriptHistoryMessage `json:"message"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.Message == nil {
+			continue
+		}
+		if entry.Type == "user" {
+			lastMsg.Role = "user"
+			lastMsg.StopReason = ""
+			lastMsg.Text = extractTextContent(entry.Message.Content)
+			hasMsg = true
+		} else if entry.Type == "assistant" {
+			lastMsg.Role = "assistant"
+			lastMsg.StopReason = entry.Message.StopReason
+			lastMsg.Text = ""
+			hasMsg = true
+		}
+	}
+
+	if !hasMsg {
+		return false
+	}
+
+	if lastMsg.Role == "user" {
+		trimmed := strings.TrimSpace(lastMsg.Text)
+		if strings.HasPrefix(trimmed, "[Request interrupted by user") {
+			return false
+		}
+		return true
+	}
+
+	if lastMsg.Role == "assistant" {
+		sr := lastMsg.StopReason
+		isFinal := sr == "end_turn" || sr == "stop_limit" || sr == "stop_sequence" || sr == "max_tokens"
+		return !isFinal
+	}
+
+	return false
+}
+
+func (a *Agent) GetRunningSessionIDs(ctx context.Context) (map[string]bool, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	sessionsDir := filepath.Join(homeDir, ".claude", "sessions")
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	running := make(map[string]bool)
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(sessionsDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var state struct {
+			Pid       int    `json:"pid"`
+			SessionID string `json:"sessionId"`
+			Cwd       string `json:"cwd"`
+		}
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+		if state.SessionID != "" && isProcessRunning(state.Pid) {
+			isExecuting := true
+			if state.Cwd != "" {
+				projectDir := findProjectDir(homeDir, state.Cwd)
+				if projectDir != "" {
+					sessionPath := filepath.Join(projectDir, state.SessionID+".jsonl")
+					if _, err := os.Stat(sessionPath); err == nil {
+						isExecuting = isSessionExecuting(sessionPath)
+					}
+				}
+			}
+			if isExecuting {
+				running[state.SessionID] = true
+			}
+		}
+	}
+	return running, nil
+}
+
 func (a *Agent) DeleteSession(_ context.Context, sessionID string) error {
 	projectDir, path, err := a.resolveClaudeSessionPath(sessionID)
 	if err != nil {
@@ -520,10 +641,11 @@ type transcriptHistoryEnvelope struct {
 }
 
 type transcriptHistoryMessage struct {
-	ID      string          `json:"id"`
-	Role    string          `json:"role"`
-	Model   string          `json:"model"`
-	Content json.RawMessage `json:"content"`
+	ID         string          `json:"id"`
+	Role       string          `json:"role"`
+	Model      string          `json:"model"`
+	Content    json.RawMessage `json:"content"`
+	StopReason string          `json:"stop_reason"`
 }
 
 type transcriptContentBlock struct {

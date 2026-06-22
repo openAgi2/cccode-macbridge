@@ -585,6 +585,31 @@ func startPassiveSubscription(ctx context.Context, h *Handlers, backendID string
 				continue
 			}
 
+			// Sync session runtimeState from passive events to memory sessionRegistry
+			if ev.SessionID != "" {
+				if eventName == "turn_started" {
+					h.sessions.markRunning(ev.SessionID)
+				} else if eventName == "turn_completed" || eventName == "error" {
+					h.sessions.markIdle(ev.SessionID)
+				} else if eventName == "session_state_changed" {
+					if dataMap, ok := data.(map[string]interface{}); ok {
+						if state, ok := dataMap["state"].(string); ok {
+							if state == "running" || state == "requiresAction" {
+								h.sessions.markRunning(ev.SessionID)
+							} else if state == "idle" {
+								h.sessions.markIdle(ev.SessionID)
+							}
+						}
+					}
+				} else if eventName == "session_status_changed" {
+					if dataMap, ok := data.(map[string]interface{}); ok {
+						if isIdle, ok := dataMap["isIdle"].(bool); ok && isIdle {
+							h.sessions.markIdle(ev.SessionID)
+						}
+					}
+				}
+			}
+
 			h.mu.Lock()
 			h.seq++
 			seq := h.seq

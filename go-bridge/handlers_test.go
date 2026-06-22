@@ -73,6 +73,7 @@ type fakeAgent struct {
 	generateSessionID  bool
 	nextSessionIndex   int
 	startedProviders   map[string]string
+	runningSessionIDs  map[string]bool
 }
 
 type unsupportedMutationAgent struct {
@@ -92,6 +93,10 @@ func (u *unsupportedMutationAgent) ListSessions(context.Context) ([]core.AgentSe
 func (u *unsupportedMutationAgent) Stop() error { return nil }
 
 func (f *fakeAgent) Name() string { return f.name }
+
+func (f *fakeAgent) GetRunningSessionIDs(ctx context.Context) (map[string]bool, error) {
+	return f.runningSessionIDs, nil
+}
 
 func (f *fakeAgent) StartSession(_ context.Context, sessionID string) (core.AgentSession, error) {
 	if f.startErr != nil {
@@ -2933,4 +2938,92 @@ func TestListDirectory(t *testing.T) {
 		t.Errorf("expected ~/foo to resolve to %s, got %s", filepath.Join(homeDir, "foo"), res2)
 	}
 }
+
+func TestSessionRuntimeStateEnrichment(t *testing.T) {
+	agent := &fakeAgent{
+		name: "mockagent",
+		sessionInfos: []core.AgentSessionInfo{{
+			ID:           "ses_running",
+			Summary:      "Running session",
+			MessageCount: 1,
+			ModifiedAt:   time.Unix(1710000500, 0).UTC(),
+		}},
+		runningSessionIDs: map[string]bool{"ses_running": true},
+	}
+
+	handlers := newTestHandlers(t)
+	handlers.RegisterAgent("mockagent", agent)
+	handlers.sessions.markRunning("ses_running")
+
+	serverConn, clientConn, cleanup := openTestConn(t)
+	defer cleanup()
+
+	// 1. Test resume_session returns runtimeState
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "mockagent",
+		Method:    "resume_session",
+		RequestID: "req-resume",
+		Params:    mustJSONRaw(t, map[string]any{"sessionId": "ses_running", "directory": "/tmp"}),
+	})
+	messages := readJSONMaps(t, clientConn, 1)
+	data, _ := messages[0]["data"].(map[string]any)
+	if got := data["runtimeState"]; got != "running" {
+		t.Fatalf("resume_session runtimeState = %#v, want running", got)
+	}
+
+	// 2. Test get_session returns runtimeState
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "mockagent",
+		Method:    "get_session",
+		RequestID: "req-get",
+		Params:    mustJSONRaw(t, map[string]any{"sessionId": "ses_running"}),
+	})
+	messages = readJSONMaps(t, clientConn, 1)
+	data, _ = messages[0]["data"].(map[string]any)
+	session, _ := data["session"].(map[string]any)
+	if got := session["runtimeState"]; got != "running" {
+		t.Fatalf("get_session runtimeState = %#v, want running", got)
+	}
+
+	// 3. Test list_sessions returns runtimeState
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "mockagent",
+		Method:    "list_sessions",
+		RequestID: "req-list",
+		Params:    mustJSONRaw(t, map[string]any{}),
+	})
+	messages = readJSONMaps(t, clientConn, 1)
+	data, _ = messages[0]["data"].(map[string]any)
+	sessionsRaw, _ := data["sessions"].([]any)
+	if len(sessionsRaw) == 0 {
+		t.Fatalf("expected at least one session")
+	}
+	firstSession, _ := sessionsRaw[0].(map[string]any)
+	if got := firstSession["runtimeState"]; got != "running" {
+		t.Fatalf("list_sessions runtimeState = %#v, want running", got)
+	}
+
+	// 4. Test GetRunningSessionIDs fallback detection (not in memory, but running in agent)
+	agent.sessionInfos = append(agent.sessionInfos, core.AgentSessionInfo{
+		ID:           "ses_external",
+		Summary:      "External session",
+		MessageCount: 1,
+		ModifiedAt:   time.Unix(1710000500, 0).UTC(),
+	})
+	agent.runningSessionIDs = map[string]bool{"ses_external": true}
+
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "mockagent",
+		Method:    "get_session",
+		RequestID: "req-get-external",
+		Params:    mustJSONRaw(t, map[string]any{"sessionId": "ses_external"}),
+	})
+	messages = readJSONMaps(t, clientConn, 1)
+	data, _ = messages[0]["data"].(map[string]any)
+	session, _ = data["session"].(map[string]any)
+	if got := session["runtimeState"]; got != "running" {
+		t.Fatalf("get_session (external) runtimeState = %#v, want running", got)
+	}
+}
+
 

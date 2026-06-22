@@ -828,17 +828,37 @@ func (h *Handlers) handleOpenCodeRPC(conn Connection, msg WireMessage) {
 }
 
 func (h *Handlers) enrichSessionState(mapped map[string]interface{}) map[string]interface{} {
+	return h.enrichSessionStateWithAgent(mapped, nil)
+}
+
+func (h *Handlers) enrichSessionStateWithAgent(mapped map[string]interface{}, agent core.Agent) map[string]interface{} {
 	if mapped == nil {
 		return nil
 	}
 	sessionID, _ := mapped["id"].(string)
 	if sessionID != "" {
+		state := "idle"
 		if ts, ok := h.sessions.get(sessionID); ok {
-			mapped["runtimeState"] = string(ts.state)
+			state = string(ts.state)
 		}
+		if agent != nil {
+			if lister, ok := agent.(core.RunningSessionLister); ok {
+				runningMap, err := lister.GetRunningSessionIDs(context.TODO())
+				if err == nil {
+					if runningMap[sessionID] {
+						state = "running"
+					} else {
+						state = "idle"
+						h.sessions.markIdle(sessionID)
+					}
+				}
+			}
+		}
+		mapped["runtimeState"] = state
 	}
 	return mapped
 }
+
 
 // ── ocProxy: list_sessions ────────────────────────────────────────────────────
 
@@ -1025,6 +1045,7 @@ func (h *Handlers) ocHandleSendMessage(conn Connection, msg WireMessage, dir str
 		return
 	}
 
+	h.sessions.markRunning(params.SessionID)
 	conn.SendResult(msg.RequestID, &ResultResponse{Ok: true}, nil)
 	h.startRelayIfNotRunning(params.SessionID, sess, conn, msg.BackendID)
 }
@@ -1693,7 +1714,7 @@ func (h *Handlers) handleCreateSession(conn Connection, msg WireMessage, agent c
 	}
 
 	conn.SendEvent(sessionID, msg.BackendID, "session_state_changed", map[string]interface{}{"state": "idle"})
-	conn.SendResult(msg.RequestID, result, nil)
+	conn.SendResult(msg.RequestID, h.enrichSessionState(result), nil)
 }
 
 func waitForSessionID(sess core.AgentSession, timeout time.Duration) string {
@@ -1934,6 +1955,29 @@ func (h *Handlers) relayEvents(conn Connection, sess core.AgentSession, sessionI
 			if eventName == "" {
 				slog.Debug("go-bridge: relayEvents unmapped event", "backendID", backendID, "sessionID", sessionID, "eventType", ev.Type)
 				continue
+			}
+
+			// Sync session runtimeState from relayed events to memory sessionRegistry
+			if eventName == "turn_started" {
+				h.sessions.markRunning(sessionID)
+			} else if eventName == "turn_completed" || eventName == "error" {
+				h.sessions.markIdle(sessionID)
+			} else if eventName == "session_state_changed" {
+				if dataMap, ok := data.(map[string]interface{}); ok {
+					if state, ok := dataMap["state"].(string); ok {
+						if state == "running" || state == "requiresAction" {
+							h.sessions.markRunning(sessionID)
+						} else if state == "idle" {
+							h.sessions.markIdle(sessionID)
+						}
+					}
+				}
+			} else if eventName == "session_status_changed" {
+				if dataMap, ok := data.(map[string]interface{}); ok {
+					if isIdle, ok := dataMap["isIdle"].(bool); ok && isIdle {
+						h.sessions.markIdle(sessionID)
+					}
+				}
 			}
 
 			if eventCount <= 3 || eventName == "todos_updated" || eventName == "turn_completed" || eventName == "error" {
@@ -2332,7 +2376,8 @@ func (h *Handlers) handleGetSession(conn Connection, msg WireMessage, agent core
 					ModifiedAt:   updatedAt,
 					Directory:    realDir,
 				}
-				conn.SendResult(msg.RequestID, map[string]interface{}{"session": sessionsToWire([]core.AgentSessionInfo{sessionInfo})[0]}, nil)
+				wireSession := sessionsToWire([]core.AgentSessionInfo{sessionInfo})[0]
+				conn.SendResult(msg.RequestID, map[string]interface{}{"session": h.enrichSessionStateWithAgent(wireSession, agent)}, nil)
 				return
 			}
 		}
@@ -2346,7 +2391,8 @@ func (h *Handlers) handleGetSession(conn Connection, msg WireMessage, agent core
 
 	for _, session := range sessions {
 		if session.ID == params.SessionID {
-			conn.SendResult(msg.RequestID, map[string]interface{}{"session": sessionsToWire([]core.AgentSessionInfo{session})[0]}, nil)
+			wireSession := sessionsToWire([]core.AgentSessionInfo{session})[0]
+			conn.SendResult(msg.RequestID, map[string]interface{}{"session": h.enrichSessionStateWithAgent(wireSession, agent)}, nil)
 			return
 		}
 	}
@@ -2400,6 +2446,9 @@ func (h *Handlers) handleListSessions(conn Connection, msg WireMessage, agent co
 		}
 		mappingStarted := time.Now()
 		wireSessions := sessionsToWire(sessions)
+		for i, s := range wireSessions {
+			wireSessions[i] = h.enrichSessionStateWithAgent(s, agent)
+		}
 		result := paginateSessionList(wireSessions, extractStringParam(msg, "cursor"), limit)
 		metrics.wireMapping += time.Since(mappingStarted)
 		if ws, ok := result["sessions"].([]map[string]interface{}); ok {
@@ -2420,6 +2469,9 @@ func (h *Handlers) handleListSessions(conn Connection, msg WireMessage, agent co
 	}
 	mappingStarted := time.Now()
 	allSessions := h.claudeSessions.list(projectKey, metrics.context())
+	for i, s := range allSessions {
+		allSessions[i] = h.enrichSessionStateWithAgent(s, agent)
+	}
 	result := paginateSessionList(allSessions, extractStringParam(msg, "cursor"), limit)
 	metrics.wireMapping += time.Since(mappingStarted)
 	if ws, ok := result["sessions"].([]map[string]interface{}); ok {
@@ -2912,10 +2964,11 @@ func (h *Handlers) handleResumeSession(conn Connection, msg WireMessage, agent c
 	// --resume 会重放完整历史到 stdout，events channel（64 容量）会
 	// 被历史事件填满导致 readLoop 阻塞，后续 send_message 无法转发响应。
 	// 实际 session 创建延迟到 send_message 时按需进行。
-	conn.SendResult(msg.RequestID, map[string]interface{}{
+	result := map[string]interface{}{
 		"id":        params.SessionID,
 		"directory": dir,
-	}, nil)
+	}
+	conn.SendResult(msg.RequestID, h.enrichSessionStateWithAgent(result, agent), nil)
 }
 
 func (h *Handlers) handleSwitchModel(conn Connection, msg WireMessage, agent core.Agent) {

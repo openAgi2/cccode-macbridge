@@ -1,8 +1,11 @@
 package claudecode
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openAgi2/cccode-macbridge/core"
@@ -497,3 +500,119 @@ func TestFindProjectDir_ICloudPath(t *testing.T) {
 		t.Errorf("findProjectDir(%q, %q) = %q, want %q", homeDir, iCloudWorkDir, found, mockProjectDir)
 	}
 }
+
+func TestGetRunningSessionIDs(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	sessionsDir := filepath.Join(tempHome, ".claude", "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("failed to create sessions dir: %v", err)
+	}
+
+	// 1. Write an active session file with current process PID (which is guaranteed to be running)
+	myPid := os.Getpid()
+	stateData := []byte(fmt.Sprintf(`{"pid":%d,"sessionId":"ses-active-123"}`, myPid))
+	if err := os.WriteFile(filepath.Join(sessionsDir, fmt.Sprintf("%d.json", myPid)), stateData, 0644); err != nil {
+		t.Fatalf("failed to write active session: %v", err)
+	}
+
+	// 2. Write an inactive session file with a PID that is not running (e.g. 999999 or similar very large PID)
+	stateDataInactive := []byte(`{"pid":999999,"sessionId":"ses-inactive-456"}`)
+	if err := os.WriteFile(filepath.Join(sessionsDir, "999999.json"), stateDataInactive, 0644); err != nil {
+		t.Fatalf("failed to write inactive session: %v", err)
+	}
+
+	a, err := New(map[string]any{"work_dir": "/tmp"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	ag := a.(*Agent)
+
+	running, err := ag.GetRunningSessionIDs(context.Background())
+	if err != nil {
+		t.Fatalf("GetRunningSessionIDs returned error: %v", err)
+	}
+
+	if !running["ses-active-123"] {
+		t.Error("expected ses-active-123 to be running")
+	}
+	if running["ses-inactive-456"] {
+		t.Error("expected ses-inactive-456 to NOT be running")
+	}
+}
+
+func TestIsSessionExecuting(t *testing.T) {
+	tempDir := t.TempDir()
+	sessionPath := filepath.Join(tempDir, "session.jsonl")
+
+	// Case 1: Missing file -> false
+	if isSessionExecuting(sessionPath) {
+		t.Error("expected false for missing file")
+	}
+
+	// Case 2: Empty file -> false
+	if err := os.WriteFile(sessionPath, []byte(""), 0644); err != nil {
+		t.Fatalf("failed to write empty file: %v", err)
+	}
+	if isSessionExecuting(sessionPath) {
+		t.Error("expected false for empty file")
+	}
+
+	// Helper to write lines
+	writeLines := func(lines []string) {
+		data := strings.Join(lines, "\n") + "\n"
+		if err := os.WriteFile(sessionPath, []byte(data), 0644); err != nil {
+			t.Fatalf("failed to write lines: %v", err)
+		}
+	}
+
+	// Case 3: Regular user prompt -> executing (true)
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+	})
+	if !isSessionExecuting(sessionPath) {
+		t.Error("expected true for user prompt")
+	}
+
+	// Case 4: Assistant calling tool (stop_reason: tool_use) -> executing (true)
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}`,
+	})
+	if !isSessionExecuting(sessionPath) {
+		t.Error("expected true for tool use stop reason")
+	}
+
+	// Case 5: Assistant completed turn (stop_reason: end_turn) -> idle (false)
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
+	})
+	if isSessionExecuting(sessionPath) {
+		t.Error("expected false for end_turn stop reason")
+	}
+
+	// Case 6: User interrupted -> idle (false)
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`,
+	})
+	if isSessionExecuting(sessionPath) {
+		t.Error("expected false for interrupted user message")
+	}
+
+	// Case 7: Trailing attachment / non-message line -> should still resolve the last message
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"attachment","uuid":"abc"}`,
+	})
+	if isSessionExecuting(sessionPath) {
+		t.Error("expected false when trailing line is non-message but last message is end_turn")
+	}
+}
+

@@ -3,6 +3,7 @@
 package claudecode
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -35,3 +36,16 @@ func signalProcessGroup(cmd *exec.Cmd, _ syscall.Signal) error {
 	}
 	return cmd.Process.Kill()
 }
+
+func isProcessRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	_ = proc.Release()
+	return true
+}
+

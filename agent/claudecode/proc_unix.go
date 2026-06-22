@@ -45,3 +45,22 @@ func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 	}
 	return nil
 }
+
+func isProcessRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = process.Signal(syscall.Signal(0))
+	if err == nil {
+		return true
+	}
+	if errno, ok := err.(syscall.Errno); ok && errno == syscall.EPERM {
+		return true
+	}
+	return false
+}
+
