@@ -611,7 +611,7 @@ func (a *Agent) GetRunningSessionIDs(ctx context.Context) (map[string]bool, erro
 					if _, err := os.Stat(sessionPath); err == nil {
 						isExecuting = isSessionExecuting(sessionPath)
 					} else {
-						slog.Debug("GetRunningSessionIDs: transcript file not found, defaulting to idle",
+						slog.Info("GetRunningSessionIDs: transcript file not found, defaulting to idle",
 							"sessionID", state.SessionID,
 							"cwd", state.Cwd,
 							"projectDir", projectDir,
@@ -619,7 +619,7 @@ func (a *Agent) GetRunningSessionIDs(ctx context.Context) (map[string]bool, erro
 							"statError", err)
 					}
 				} else {
-					slog.Debug("GetRunningSessionIDs: project dir not found for cwd, defaulting to idle",
+					slog.Warn("GetRunningSessionIDs: project dir not found for cwd, defaulting to idle",
 						"sessionID", state.SessionID,
 						"cwd", state.Cwd)
 				}
