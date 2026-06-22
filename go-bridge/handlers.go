@@ -841,7 +841,47 @@ func (h *Handlers) enrichSessionStateWithAgent(mapped map[string]interface{}, ag
 		if ts, ok := h.sessions.get(sessionID); ok {
 			state = string(ts.state)
 		}
-		if agent != nil {
+
+		// 对 claudecode：优先用 GetRunningSessionIDs（检查有活跃进程的 session）。
+		// 若 session 不在结果中（进程已退出、session 文件已清理），回退到直接读取
+		// transcript 文件判定。这修复了进程退出后 registry 旧 "running" 状态泄漏的问题。
+		if agent != nil && agent.Name() == "claudecode" {
+			usedTranscriptFallback := false
+			if lister, ok := agent.(core.RunningSessionLister); ok {
+				runningMap, err := lister.GetRunningSessionIDs(context.TODO())
+				if err == nil {
+					if runningMap[sessionID] {
+						state = "running"
+					} else {
+						// 不在 runningMap 中——进程可能已退出。
+						// 回退到直接读取 transcript 文件判定。
+						_, sessPath := findClaudeSessionFile(sessionID, "")
+						if sessPath != "" {
+							state = h.detectClaudeTranscriptState(sessPath)
+							if state == "unknown" {
+								state = "idle"
+							}
+						} else {
+							state = "idle"
+						}
+						h.sessions.markIdle(sessionID)
+						usedTranscriptFallback = true
+					}
+				}
+			}
+			if !usedTranscriptFallback && state == "running" {
+				// registry 说 running 但 GetRunningSessionIDs 出错，
+				// 也用 transcript 校验。
+				_, sessPath := findClaudeSessionFile(sessionID, "")
+				if sessPath != "" {
+					fileState := h.detectClaudeTranscriptState(sessPath)
+					if fileState == "idle" {
+						state = "idle"
+						h.sessions.markIdle(sessionID)
+					}
+				}
+			}
+		} else if agent != nil {
 			if lister, ok := agent.(core.RunningSessionLister); ok {
 				runningMap, err := lister.GetRunningSessionIDs(context.TODO())
 				if err == nil {
