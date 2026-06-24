@@ -27,6 +27,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # 分页测试(go-bridge TestPaginatedMessages*/TestListSessionsPagination*)
+      # 通过 codex.New() 需要 codex CLI;缺失会 panic "codex CLI not found in PATH"。
+      - run: npm install -g @openai/codex --force
       - run: go build ./go-bridge
       - run: go test ./go-bridge/... -count=1
       - run: go test ./... -count=1
