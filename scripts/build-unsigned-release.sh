@@ -30,30 +30,30 @@ xcodebuild \
   -derivedDataPath "$derived_data" \
   MARKETING_VERSION="$version" \
   CURRENT_PROJECT_VERSION="$build_number" \
-  CCCODE_RUNTIME_VERSION="$version" \
-  CCCODE_RUNTIME_COMMIT="$commit" \
-  CCCODE_RUNTIME_DATE="$build_date" \
+  CORDCODE_RUNTIME_VERSION="$version" \
+  CORDCODE_RUNTIME_COMMIT="$commit" \
+  CORDCODE_RUNTIME_DATE="$build_date" \
   CODE_SIGN_IDENTITY=- \
   CODE_SIGNING_REQUIRED=YES \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   build
 
 test -x "$app/Contents/MacOS/CordCodeLink"
-test -x "$app/Contents/Resources/cccode-bridge-runtime"
+test -x "$app/Contents/Resources/cordcode-bridge-runtime"
 codesign --verify --deep --strict "$app"
 if codesign -d --entitlements :- "$app" 2>/dev/null | grep -q 'get-task-allow'; then
   echo "Unsigned release unexpectedly contains get-task-allow" >&2
   exit 1
 fi
 
-runtime_version="$("$app/Contents/Resources/cccode-bridge-runtime" -version)"
+runtime_version="$("$app/Contents/Resources/cordcode-bridge-runtime" -version)"
 if [[ "$runtime_version" != *"$version"* || "$runtime_version" != *"$commit"* ]]; then
   echo "Runtime metadata mismatch: $runtime_version" >&2
   exit 1
 fi
 
 app_archs="$(lipo -archs "$app/Contents/MacOS/CordCodeLink")"
-runtime_archs="$(lipo -archs "$app/Contents/Resources/cccode-bridge-runtime")"
+runtime_archs="$(lipo -archs "$app/Contents/Resources/cordcode-bridge-runtime")"
 if [[ "$app_archs" != "$runtime_archs" ]]; then
   echo "Architecture mismatch: app=$app_archs runtime=$runtime_archs" >&2
   exit 1

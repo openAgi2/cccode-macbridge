@@ -26,13 +26,13 @@ type baselineSession struct {
 }
 
 func TestSessionLoadingRealDatasetBaseline(t *testing.T) {
-	if os.Getenv("CCCODE_SESSION_LOADING_BASELINE") != "1" {
-		t.Skip("set CCCODE_SESSION_LOADING_BASELINE=1 to run against real local transcripts")
+	if os.Getenv("CORDCODE_SESSION_LOADING_BASELINE") != "1" {
+		t.Skip("set CORDCODE_SESSION_LOADING_BASELINE=1 to run against real local transcripts")
 	}
 
-	metricsPath := os.Getenv("CCCODE_SESSION_LOADING_BASELINE_OUTPUT")
+	metricsPath := os.Getenv("CORDCODE_SESSION_LOADING_BASELINE_OUTPUT")
 	if metricsPath == "" {
-		t.Fatal("CCCODE_SESSION_LOADING_BASELINE_OUTPUT is required")
+		t.Fatal("CORDCODE_SESSION_LOADING_BASELINE_OUTPUT is required")
 	}
 	if err := os.MkdirAll(filepath.Dir(metricsPath), 0o755); err != nil {
 		t.Fatal(err)

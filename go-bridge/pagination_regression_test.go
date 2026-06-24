@@ -70,8 +70,8 @@ func TestPaginatedMessages_FullBackwardTraversalNoDupesOrGaps(t *testing.T) {
 // the byte budget fixes close-1009 even for a session whose total history is
 // ~47.8MB across only 48 logical messages.
 func TestPaginatedMessages_RealSessionFirstPageBounded(t *testing.T) {
-	if os.Getenv("CCCODE_SESSION_LOADING_BASELINE") != "1" {
-		t.Skip("set CCCODE_SESSION_LOADING_BASELINE=1 to run against real local transcripts")
+	if os.Getenv("CORDCODE_SESSION_LOADING_BASELINE") != "1" {
+		t.Skip("set CORDCODE_SESSION_LOADING_BASELINE=1 to run against real local transcripts")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -80,7 +80,7 @@ func TestPaginatedMessages_RealSessionFirstPageBounded(t *testing.T) {
 	dir := filepath.Join(home, ".codex", "sessions")
 	var path string
 	var size int64
-	requestedSessionID := os.Getenv("CCCODE_SESSION_LOADING_SESSION_ID")
+	requestedSessionID := os.Getenv("CORDCODE_SESSION_LOADING_SESSION_ID")
 	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(p, ".jsonl") {
 			return nil

@@ -39,22 +39,22 @@ func Main() {
 	// 管理 API（Mac App product 模式使用，开发模式不启用）
 	managementHost := flag.String("management-host", "", "Management API host (product mode: 127.0.0.1)")
 	managementPort := flag.Int("management-port", 0, "Management API port (0 = disabled)")
-	managementToken := flag.String("management-token", envOr("CCCODE_MANAGEMENT_TOKEN", ""), "Management API auth token")
+	managementToken := flag.String("management-token", envOr("CORDCODE_MANAGEMENT_TOKEN", ""), "Management API auth token")
 	dataDirPath := flag.String("data-dir", "", "Data directory for runtime state")
 	logDirPath := flag.String("log-dir", "", "Log directory")
 	remoteURL := flag.String("remote-url", "", "外部可达的 Bridge WebSocket URL（如 wss://my-tailscale:8777/bridge）")
 	tlsPort := flag.Int("tls-port", 8778, "TLS listen port for wss:// remote access (0 = disabled)")
 	// devInsecureWS 仅用于本地开发：允许 Tailscale 远程候选在 TLS 不可用时降级为明文 ws://。
 	// 产品模式下不得启用——TLS 失败应禁用候选而非明文暴露 bearer token/业务内容（P1-4）。
-	devInsecureWS := flag.Bool("dev-insecure-ws", envOr("CCCODE_DEV_INSECURE_WS", "") != "", "DEV ONLY: allow plaintext ws:// Tailscale remote when TLS unavailable (fail-open). Product must leave unset.")
+	devInsecureWS := flag.Bool("dev-insecure-ws", envOr("CORDCODE_DEV_INSECURE_WS", "") != "", "DEV ONLY: allow plaintext ws:// Tailscale remote when TLS unavailable (fail-open). Product must leave unset.")
 	includeTailscale := flag.Bool("pairing-include-tailscale", true, "Include detected Tailscale URL in pairing QR")
 	includeRemote := flag.Bool("pairing-include-remote", true, "Include manual remote URL in pairing QR")
 	relayEnabled := flag.Bool("relay-enabled", true, "Enable encrypted relay path")
 
 	// Relay 加密通道配置（首版：通过 flags 或环境变量注入，后续由 MacBridge runtime config 驱动）
-	relayEndpoint := flag.String("relay-endpoint", envOr("CCCODE_RELAY_ENDPOINT", ""), "Relay 服务端点（wss://relay.example.com）")
-	relayRouteID := flag.String("relay-route-id", envOr("CCCODE_RELAY_ROUTE_ID", ""), "Relay 路由 ID（由 relay 服务分配）")
-	relayCredential := flag.String("relay-credential", envOr("CCCODE_RELAY_CREDENTIAL", ""), "Relay 认证凭据（opaque，不复用 device token）")
+	relayEndpoint := flag.String("relay-endpoint", envOr("CORDCODE_RELAY_ENDPOINT", ""), "Relay 服务端点（wss://relay.example.com）")
+	relayRouteID := flag.String("relay-route-id", envOr("CORDCODE_RELAY_ROUTE_ID", ""), "Relay 路由 ID（由 relay 服务分配）")
+	relayCredential := flag.String("relay-credential", envOr("CORDCODE_RELAY_CREDENTIAL", ""), "Relay 认证凭据（opaque，不复用 device token）")
 	relayServiceAddr := flag.String("relay-service-addr", "", "Local-only in-process relay test listener (for example 127.0.0.1:8780)")
 
 	flag.Parse()
@@ -691,20 +691,20 @@ func clearOpenCodeServerAuthEnv() {
 // stops the supervisor itself from re-leaking via subsequent os.Environ().
 func clearControlPlaneEnv() {
 	for _, k := range []string{
-		"CCCODE_MANAGEMENT_TOKEN",
-		"CCCODE_RELAY_CREDENTIAL",
-		"CCCODE_RELAY_ROUTE_ID",
-		"CCCODE_RELAY_ENDPOINT",
+		"CORDCODE_MANAGEMENT_TOKEN",
+		"CORDCODE_RELAY_CREDENTIAL",
+		"CORDCODE_RELAY_ROUTE_ID",
+		"CORDCODE_RELAY_ENDPOINT",
 		"OPENCODE_SERVER_USERNAME",
 		"OPENCODE_SERVER_PASSWORD",
-		// Clear all other CCCODE_* control-plane vars defensively (dev flags,
+		// Clear all other CORDCODE_* control-plane vars defensively (dev flags,
 		// VPS creds, etc.). Keep the allowlisted runtime vars only if needed.
 	} {
 		_ = os.Unsetenv(k)
 	}
-	// Sweep remaining CCCODE_* vars (e.g. CCCODE_DEV_INSECURE_WS, VPS creds).
+	// Sweep remaining CORDCODE_* vars (e.g. CORDCODE_DEV_INSECURE_WS, VPS creds).
 	for _, e := range os.Environ() {
-		if k, _, ok := strings.Cut(e, "="); ok && strings.HasPrefix(k, "CCCODE_") {
+		if k, _, ok := strings.Cut(e, "="); ok && strings.HasPrefix(k, "CORDCODE_") {
 			_ = os.Unsetenv(k)
 		}
 	}

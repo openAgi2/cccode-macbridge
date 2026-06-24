@@ -300,7 +300,7 @@ class RuntimeManager: ObservableObject {
         // 环境变量：OpenCode 凭据
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = mergedCLIPath(existingPath: environment["PATH"])
-        environment["CCCODE_MANAGEMENT_TOKEN"] = token
+        environment["CORDCODE_MANAGEMENT_TOKEN"] = token
         if !config.opencodeUser.isEmpty {
             environment["OPENCODE_SERVER_USERNAME"] = config.opencodeUser
         } else {
@@ -312,19 +312,19 @@ class RuntimeManager: ObservableObject {
             environment.removeValue(forKey: "OPENCODE_SERVER_PASSWORD")
         }
         if !config.relayEndpoint.isEmpty {
-            environment["CCCODE_RELAY_ENDPOINT"] = config.relayEndpoint
+            environment["CORDCODE_RELAY_ENDPOINT"] = config.relayEndpoint
         } else {
-            environment.removeValue(forKey: "CCCODE_RELAY_ENDPOINT")
+            environment.removeValue(forKey: "CORDCODE_RELAY_ENDPOINT")
         }
         if !config.relayRouteID.isEmpty {
-            environment["CCCODE_RELAY_ROUTE_ID"] = config.relayRouteID
+            environment["CORDCODE_RELAY_ROUTE_ID"] = config.relayRouteID
         } else {
-            environment.removeValue(forKey: "CCCODE_RELAY_ROUTE_ID")
+            environment.removeValue(forKey: "CORDCODE_RELAY_ROUTE_ID")
         }
         if !config.relayCredential.isEmpty {
-            environment["CCCODE_RELAY_CREDENTIAL"] = config.relayCredential
+            environment["CORDCODE_RELAY_CREDENTIAL"] = config.relayCredential
         } else {
-            environment.removeValue(forKey: "CCCODE_RELAY_CREDENTIAL")
+            environment.removeValue(forKey: "CORDCODE_RELAY_CREDENTIAL")
         }
         process.environment = environment
 
@@ -661,13 +661,13 @@ class RuntimeManager: ObservableObject {
         if executable == currentRuntime {
             return true
         }
-        if executable.hasSuffix("/CCCodeBridge.app/Contents/Resources/cccode-bridge-runtime") {
+        if executable.hasSuffix("/CordCodeLink.app/Contents/Resources/cordcode-bridge-runtime") {
             return true
         }
         if executable.contains("/go-bridge/go-bridge") || command.contains("/go-bridge/go-bridge") {
             return true
         }
-        if executable.hasSuffix("/cccode-bridge-runtime") || command.hasSuffix("/cccode-bridge-runtime") || executable.contains("/cccode-bridge-runtime") {
+        if executable.hasSuffix("/cordcode-bridge-runtime") || command.hasSuffix("/cordcode-bridge-runtime") || executable.contains("/cordcode-bridge-runtime") {
             return true
         }
         return false

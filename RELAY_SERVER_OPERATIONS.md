@@ -73,8 +73,8 @@ export CCCODE_RELAY_VPS_PASS='<password>'
 (cd relay-server && go test ./... -count=1)
 (cd relay-server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -ldflags='-s -w' \
-  -o /tmp/cccode-relay-server ./cmd/relay-server)
-shasum -a 256 /tmp/cccode-relay-server
+  -o /tmp/cordcode-relay-server ./cmd/relay-server)
+shasum -a 256 /tmp/cordcode-relay-server
 ```
 
 不要在仓库根目录用 `go test ./...` 代替 relay module 测试。
@@ -84,12 +84,12 @@ shasum -a 256 /tmp/cccode-relay-server
 推荐：
 
 ```text
-/opt/cccode-relay/
-  bin/cccode-relay-server
+/opt/cordcode-relay/
+  bin/cordcode-relay-server
   data/
   backups/
-/etc/cccode-relay/relay.env
-/etc/systemd/system/cccode-relay.service
+/etc/cordcode-relay/relay.env
+/etc/systemd/system/cordcode-relay.service
 ```
 
 创建不可登录的系统用户并限制目录权限。systemd service 只监听
@@ -105,7 +105,7 @@ nginx 必须：
 
 ## 日常部署
 
-构建 `/tmp/cccode-relay-server` 后执行：
+构建 `/tmp/cordcode-relay-server` 后执行：
 
 ```bash
 source ~/.zshrc
@@ -130,8 +130,8 @@ scripts/deploy-relay-vps.sh
 VPS 上：
 
 ```bash
-systemctl status cccode-relay --no-pager
-journalctl -u cccode-relay -n 200 --no-pager
+systemctl status cordcode-relay --no-pager
+journalctl -u cordcode-relay -n 200 --no-pager
 ss -lntp | grep 8780
 nginx -t
 ```
@@ -155,9 +155,9 @@ curl -fsS https://relay.byteseek.uk:8443/healthz
 部署脚本失败时保留现场：
 
 ```bash
-systemctl status cccode-relay --no-pager
-journalctl -u cccode-relay --since "-10 min" --no-pager
-sha256sum /opt/cccode-relay/bin/cccode-relay-server
+systemctl status cordcode-relay --no-pager
+journalctl -u cordcode-relay --since "-10 min" --no-pager
+sha256sum /opt/cordcode-relay/bin/cordcode-relay-server
 ```
 
 使用脚本打印的原子回滚命令恢复备份，然后再次执行健康检查。不要用临时旧协议兼容分支、

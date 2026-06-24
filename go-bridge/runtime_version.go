@@ -2,7 +2,7 @@ package gobridge
 
 import "fmt"
 
-const runtimeBinaryName = "cccode-bridge-runtime"
+const runtimeBinaryName = "cordcode-bridge-runtime"
 
 // 通过 -ldflags 在 build 时注入：
 //

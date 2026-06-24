@@ -16,8 +16,8 @@ class AppDependencies: ObservableObject {
 
     init() {
         // 从 Bundle 获取 runtime binary 路径，回退到 /usr/local/bin
-        let executablePath = Bundle.main.url(forResource: "cccode-bridge-runtime", withExtension: nil)?.path
-            ?? "/usr/local/bin/cccode-bridge-runtime"
+        let executablePath = Bundle.main.url(forResource: "cordcode-bridge-runtime", withExtension: nil)?.path
+            ?? "/usr/local/bin/cordcode-bridge-runtime"
 
         let dir = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true).first!
             + "/CordCode Link"

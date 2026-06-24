@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"cccode-relay/internal/relay"
+	"cordcode-relay/internal/relay"
 )
 
 func main() {
 	listen := flag.String("listen", envOr("RELAY_LISTEN_ADDR", "127.0.0.1:8780"), "HTTP listen address")
-	database := flag.String("db", envOr("RELAY_DB_PATH", "/var/lib/cccode-relay/relay.db"), "SQLite database path")
+	database := flag.String("db", envOr("RELAY_DB_PATH", "/var/lib/cordcode-relay/relay.db"), "SQLite database path")
 	endpoint := flag.String("public-endpoint", envOr("RELAY_PUBLIC_ENDPOINT", "ws://127.0.0.1:8780"), "public WebSocket endpoint")
 	tokenHash := flag.String("provision-token-sha256", envOr("RELAY_PROVISION_TOKEN_SHA256", ""), "SHA-256 hex digest of provisioning token")
 	mailboxTTL := flag.Duration("mailbox-ttl", durationOr("RELAY_MAILBOX_TTL", 24*time.Hour), "offline mailbox TTL")
