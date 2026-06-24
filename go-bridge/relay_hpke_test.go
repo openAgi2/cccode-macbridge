@@ -58,7 +58,7 @@ func TestHPKESealOpenRoundtrip(t *testing.T) {
 	pkR := recipientPriv.PublicKey().Bytes()
 	skR := recipientPriv.Bytes()
 
-	info := []byte("cccode-relay/pairing/v1")
+	info := []byte("cordcode-relay/pairing/v1")
 	aad := []byte("pairing:test-device:2026-05-24")
 	plaintext := []byte(`{"deviceId":"dev_test","devicePubKey":"base64key","timestamp":12345}`)
 

@@ -51,7 +51,7 @@ const (
 	kemNsecret           = 32 // HKDF-SHA256 output length
 
 	// 配对上下文
-	pairingContextLabel = "cccode-relay/pairing/v1"
+	pairingContextLabel = "cordcode-relay/pairing/v1"
 
 	// 配对 claim 有效期
 	pairingClaimTTL = 5 * time.Minute

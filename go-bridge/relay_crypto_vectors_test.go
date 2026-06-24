@@ -187,7 +187,7 @@ func TestRelayCryptoVectorOnlineECDHEAndEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive identity secret: %v", err)
 	}
-	identityAuthKey := relayHKDF(t, identitySecret, nil, "cccode-relay/identity-auth/v1"+vectors.Identity.ContextCanonical)
+	identityAuthKey := relayHKDF(t, identitySecret, nil, "cordcode-relay/identity-auth/v1"+vectors.Identity.ContextCanonical)
 	if got := base64.StdEncoding.EncodeToString(identityAuthKey); got != vectors.Identity.IdentityAuthKey {
 		t.Fatalf("identity auth key differs: got %s want %s", got, vectors.Identity.IdentityAuthKey)
 	}
@@ -213,7 +213,7 @@ func TestRelayCryptoVectorOnlineECDHEAndEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive online ephemeral secret: %v", err)
 	}
-	trafficRoot := relayHKDF(t, ephemeralSecret, transcript[:], "cccode-relay/online/v1")
+	trafficRoot := relayHKDF(t, ephemeralSecret, transcript[:], "cordcode-relay/online/v1")
 	iosToMac := relayHKDF(t, trafficRoot, nil, "ios-to-mac")
 	macToIOS := relayHKDF(t, trafficRoot, nil, "mac-to-ios")
 	if got := base64.StdEncoding.EncodeToString(iosToMac); got != vectors.Online.IOSToMacKey {
@@ -235,7 +235,7 @@ func TestRelayCryptoVectorMailboxEpochChainAndEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive identity secret: %v", err)
 	}
-	identityAuthKey := relayHKDF(t, identitySecret, nil, "cccode-relay/identity-auth/v1"+vectors.Identity.ContextCanonical)
+	identityAuthKey := relayHKDF(t, identitySecret, nil, "cordcode-relay/identity-auth/v1"+vectors.Identity.ContextCanonical)
 
 	iosPrekey := relayVectorKeyAgreement(t, vectors.Mailbox.IOSPrekeyPrivateKey, vectors.Mailbox.IOSPrekeyPublicKey)
 	macEpoch := relayVectorKeyAgreement(t, vectors.Mailbox.MacEpochPrivateKey, vectors.Mailbox.MacEpochPublicKey)
@@ -243,7 +243,7 @@ func TestRelayCryptoVectorMailboxEpochChainAndEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive mailbox secret: %v", err)
 	}
-	mailboxRoot := relayHKDF(t, mailboxSecret, nil, "cccode-relay/mailbox/v1"+vectors.Mailbox.ContextCanonical)
+	mailboxRoot := relayHKDF(t, mailboxSecret, nil, "cordcode-relay/mailbox/v1"+vectors.Mailbox.ContextCanonical)
 	macToIOS := relayHKDF(t, mailboxRoot, nil, "mac-to-ios")
 	if got := base64.StdEncoding.EncodeToString(macToIOS); got != vectors.Mailbox.MacToIOSKey {
 		t.Fatalf("mailbox key differs: got %s want %s", got, vectors.Mailbox.MacToIOSKey)

@@ -6,7 +6,7 @@
     "deviceId": "dev_01HY0000000000000000000000"
   },
   "protocol": {
-    "name": "cccode-bridge",
+    "name": "cordcode-bridge",
     "version": 1,
     "supportedSchemaRevisions": ["2026-05-07"]
   }

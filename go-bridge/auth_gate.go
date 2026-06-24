@@ -20,11 +20,11 @@ func NewAuthMiddleware(store TrustedDeviceStore) *AuthMiddleware {
 }
 
 // AuthenticateRequest 从 HTTP 请求中提取 Bearer token 和 Device-ID，
-// 优先从 Authorization 头和 X-CCCode-Device-ID 头提取，
+// 优先从 Authorization 头和 X-CordCode-Device-ID 头提取，
 // 若缺失则从 URL query 参数 token 和 deviceId 提取（兼容 URLSessionWebSocketTask 丢弃 Authorization 头的情况）。
 func (m *AuthMiddleware) AuthenticateRequest(r *http.Request) (*TrustedDeviceRecord, error) {
 	token := extractBearerToken(r)
-	deviceID := r.Header.Get("X-CCCode-Device-ID")
+	deviceID := r.Header.Get("X-CordCode-Device-ID")
 
 	// URLSessionWebSocketTask 可能丢弃 Authorization 头，从 query 参数兜底
 	if token == "" {

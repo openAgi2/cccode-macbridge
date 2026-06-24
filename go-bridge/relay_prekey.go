@@ -27,9 +27,9 @@ const (
 	prekeyLowWatermark   = 10 // 低水位：未消费 prekey 少于此值触发补充
 	prekeyTargetCount    = 32 // 目标水位
 	prekeyMaxCount       = 64 // 硬上限
-	prekeyLabel          = "cccode-relay/prekey/v1"
-	deliveryEpochLabel   = "cccode-relay/delivery-epoch/v1"
-	macToIosMailboxLabel = "cccode-relay/mailbox-mac-to-ios/v1"
+	prekeyLabel          = "cordcode-relay/prekey/v1"
+	deliveryEpochLabel   = "cordcode-relay/delivery-epoch/v1"
+	macToIosMailboxLabel = "cordcode-relay/mailbox-mac-to-ios/v1"
 )
 
 // DeliveryPrekey 记录一个 iOS 上传的一次性 delivery prekey。
@@ -311,11 +311,11 @@ func (ps *PrekeyStore) ConsumePrekey(deviceID string) (*DeliveryEpoch, error) {
 	}
 
 	// HKDF 派生 mailbox key（两步，与 crypto vectors 一致）
-	// mailboxRoot = HKDF(shared, nil, "cccode-relay/mailbox/v1" + context)
+	// mailboxRoot = HKDF(shared, nil, "cordcode-relay/mailbox/v1" + context)
 	// macToIosKey = HKDF(mailboxRoot, nil, "mac-to-ios")
 	epochIdx := ps.epochIndex[deviceID] // 从 0 开始的递增序号
 	context := ps.buildMailboxContext(deviceID, prekey.PrekeyID, epochIdx)
-	mailboxRoot, err := hkdfExpand(shared, append([]byte("cccode-relay/mailbox/v1"), context...), 32)
+	mailboxRoot, err := hkdfExpand(shared, append([]byte("cordcode-relay/mailbox/v1"), context...), 32)
 	if err != nil {
 		return nil, fmt.Errorf("derive mailbox root: %w", err)
 	}
@@ -599,7 +599,7 @@ func DeriveMailboxKeyFromPrekey(
 		return nil, fmt.Errorf("bridge identity not configured")
 	}
 	ctx := []byte(fmt.Sprintf(`["%s","%s","%s",%d]`, bridgeID, deviceID, prekeyID, epochIndex))
-	mailboxRoot, err := hkdfExpand(shared, append([]byte("cccode-relay/mailbox/v1"), ctx...), 32)
+	mailboxRoot, err := hkdfExpand(shared, append([]byte("cordcode-relay/mailbox/v1"), ctx...), 32)
 	if err != nil {
 		return nil, fmt.Errorf("derive mailbox root: %w", err)
 	}

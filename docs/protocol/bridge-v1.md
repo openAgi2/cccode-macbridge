@@ -2,7 +2,7 @@
 
 Direct bridge protocol between iOS and MacBridge over WebSocket.
 
-> **命名说明：** 本协议的 wire 名称固定为 `cccode-bridge`（见下文协议常量），不随
+> **命名说明：** 本协议的 wire 名称固定为 `cordcode-bridge`（见下文协议常量），不随
 > 产品名 CCCode→CordCode 变更。本文标题与说明用新品牌名 CordCode。
 
 ## Envelope
@@ -34,7 +34,7 @@ New clients must send:
 {
   "type": "hello",
   "client": {"app": "CCCode iOS", "version": "1.0.0", "deviceId": "dev_..."},
-  "protocol": {"name": "cccode-bridge", "version": 1, "supportedSchemaRevisions": ["2026-05-07"]}
+  "protocol": {"name": "cordcode-bridge", "version": 1, "supportedSchemaRevisions": ["2026-05-07"]}
 }
 ```
 

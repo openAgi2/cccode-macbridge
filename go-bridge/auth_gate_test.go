@@ -27,7 +27,7 @@ func TestAuthMiddleware_AuthenticateRequest_Success(t *testing.T) {
 	m, _, plain := newAuthMiddlewareWithStore()
 	r := httptest.NewRequest("GET", "/bridge", nil)
 	r.Header.Set("Authorization", "Bearer "+plain)
-	r.Header.Set("X-CCCode-Device-ID", "test-device")
+	r.Header.Set("X-CordCode-Device-ID", "test-device")
 
 	rec, err := m.AuthenticateRequest(r)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	m, _, _ := newAuthMiddlewareWithStore()
 	r := httptest.NewRequest("GET", "/bridge", nil)
 	r.Header.Set("Authorization", "Bearer bad_token")
-	r.Header.Set("X-CCCode-Device-ID", "test-device")
+	r.Header.Set("X-CordCode-Device-ID", "test-device")
 
 	_, err := m.AuthenticateRequest(r)
 	authErr, ok := err.(AuthError)
@@ -74,7 +74,7 @@ func TestAuthMiddleware_RevokedToken(t *testing.T) {
 
 	r := httptest.NewRequest("GET", "/bridge", nil)
 	r.Header.Set("Authorization", "Bearer "+plain)
-	r.Header.Set("X-CCCode-Device-ID", "test-device")
+	r.Header.Set("X-CordCode-Device-ID", "test-device")
 
 	_, err := m.AuthenticateRequest(r)
 	authErr, ok := err.(AuthError)
@@ -131,7 +131,7 @@ func TestAuthMiddleware_HeaderPreferredOverQuery(t *testing.T) {
 	// 同时有 header 和 query，header 优先
 	r := httptest.NewRequest("GET", "/bridge?token=wrong_token&deviceId=wrong", nil)
 	r.Header.Set("Authorization", "Bearer "+plain)
-	r.Header.Set("X-CCCode-Device-ID", "test-device")
+	r.Header.Set("X-CordCode-Device-ID", "test-device")
 
 	rec, err := m.AuthenticateRequest(r)
 	if err != nil {

@@ -40,11 +40,11 @@ TOKEN="$(openssl rand -base64 32)"
 printf '%s' "$TOKEN" | shasum -a 256
 ```
 
-`/etc/cccode-relay/relay.env` 示例，`RELAY_PROVISION_TOKEN_SHA256` 替换为上一步摘要：
+`/etc/cordcode-relay/relay.env` 示例，`RELAY_PROVISION_TOKEN_SHA256` 替换为上一步摘要：
 
 ```bash
 RELAY_LISTEN_ADDR=127.0.0.1:8780
-RELAY_DB_PATH=/var/lib/cccode-relay/relay.db
+RELAY_DB_PATH=/var/lib/cordcode-relay/relay.db
 RELAY_PUBLIC_ENDPOINT=wss://relay.example.com:8443
 RELAY_PROVISION_TOKEN_SHA256=<sha256-hex>
 RELAY_ACTIVATION_RATE_LIMIT_PER_MINUTE=6

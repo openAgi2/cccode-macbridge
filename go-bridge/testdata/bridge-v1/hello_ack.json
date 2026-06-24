@@ -10,7 +10,7 @@
       "remote": null
     },
     "protocol": {
-      "name": "cccode-bridge",
+      "name": "cordcode-bridge",
       "version": 1,
       "schemaRevision": "2026-05-07"
     },

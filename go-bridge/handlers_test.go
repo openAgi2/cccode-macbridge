@@ -1275,7 +1275,7 @@ func TestRegisterAckAdvertisesTodosCapabilityForCodexProvider(t *testing.T) {
 	server.handleRegister(serverConn, &WireMessage{
 		Type:     "register",
 		Client:   mustJSONRaw(t, map[string]any{"name": "test-client"}),
-		Protocol: mustJSONRaw(t, map[string]any{"name": "cccode-bridge", "version": 1}),
+		Protocol: mustJSONRaw(t, map[string]any{"name": "cordcode-bridge", "version": 1}),
 	})
 
 	messages := readJSONMaps(t, clientConn, 1)
@@ -1317,7 +1317,7 @@ func TestRegisterAckAdvertisesProviderSwitchCapabilityForCodex(t *testing.T) {
 	server.handleRegister(serverConn, &WireMessage{
 		Type:     "register",
 		Client:   mustJSONRaw(t, map[string]any{"name": "test-client"}),
-		Protocol: mustJSONRaw(t, map[string]any{"name": "cccode-bridge", "version": 1}),
+		Protocol: mustJSONRaw(t, map[string]any{"name": "cordcode-bridge", "version": 1}),
 	})
 
 	messages := readJSONMaps(t, clientConn, 1)

@@ -28,7 +28,7 @@ func TestHPKECirclInterop(t *testing.T) {
 
 	suite := hpke.NewSuite(hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_ChaCha20Poly1305)
 
-	info := []byte("cccode-relay/pairing/v1")
+	info := []byte("cordcode-relay/pairing/v1")
 	aad := []byte("pairing:test-device:2026-05-25")
 	plaintext := []byte(`{"deviceId":"dev_interop","devicePubKey":"dGVzdA==","timestamp":1748000000}`)
 

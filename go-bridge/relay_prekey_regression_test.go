@@ -357,7 +357,7 @@ func TestRegressionR7_IosSidePFS(t *testing.T) {
 	}
 
 	ctx := []byte(`["brg_fixture","dev_ios_pfs","pk_ios_pfs",0]`)
-	mailboxRoot, err := hkdfExpand(shared, append([]byte("cccode-relay/mailbox/v1"), ctx...), 32)
+	mailboxRoot, err := hkdfExpand(shared, append([]byte("cordcode-relay/mailbox/v1"), ctx...), 32)
 	if err != nil {
 		t.Fatal(err)
 	}

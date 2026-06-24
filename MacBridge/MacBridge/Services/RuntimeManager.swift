@@ -1159,7 +1159,7 @@ actor OfficialRelayProvisioner {
         let nonce = UUID().uuidString.lowercased()
         let publicKey = activation.privateKey.publicKey.rawRepresentation.base64EncodedString()
         let payload = [
-            "cccode-relay/activation/v1",
+            "cordcode-relay/activation/v1",
             activation.installID,
             publicKey,
             bridgeAuth,

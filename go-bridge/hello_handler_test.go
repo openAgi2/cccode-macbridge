@@ -181,7 +181,7 @@ func TestHelloMessage_JSONRoundTrip(t *testing.T) {
 			DeviceID: "device-abc",
 		},
 		Protocol: HelloProtocol{
-			Name:                     "cccode-bridge",
+			Name:                     "cordcode-bridge",
 			Version:                  1,
 			SupportedSchemaRevisions: []string{"2026-05-07", "2026-05-01"},
 		},

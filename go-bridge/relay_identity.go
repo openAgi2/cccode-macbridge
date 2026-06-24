@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	identityAuthLabel  = "cccode-relay/identity-auth/v1"
-	onlineTrafficLabel = "cccode-relay/online/v1"
+	identityAuthLabel  = "cordcode-relay/identity-auth/v1"
+	onlineTrafficLabel = "cordcode-relay/online/v1"
 	iosToMacLabel      = "ios-to-mac"
 	macToIosLabel      = "mac-to-ios"
 	trafficKeyLen      = 32
@@ -101,7 +101,7 @@ func (ci *RelayCryptoIdentity) Fingerprint() string {
 // 方案 §5.3：
 //
 //	identityAuthKey = HKDF(X25519(localIdentityPrivateKey, remoteIdentityPublicKey),
-//	                        "cccode-relay/identity-auth/v1" + canonical([bridgeID, deviceID]))
+//	                        "cordcode-relay/identity-auth/v1" + canonical([bridgeID, deviceID]))
 func (ci *RelayCryptoIdentity) DeriveIdentityAuthKey(
 	remoteIdentityPubKey []byte,
 	bridgeID, deviceID string,

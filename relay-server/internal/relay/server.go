@@ -321,7 +321,7 @@ func (s *Server) handleActivateRoute(w http.ResponseWriter, r *http.Request) int
 
 func activationPayload(installID, publicKey, bridgeAuth string, timestamp int64, nonce string) []byte {
 	return []byte(strings.Join([]string{
-		"cccode-relay/activation/v1",
+		"cordcode-relay/activation/v1",
 		installID,
 		publicKey,
 		bridgeAuth,

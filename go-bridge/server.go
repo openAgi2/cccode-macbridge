@@ -248,7 +248,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		dev, authErr := s.authMiddleware.AuthenticateRequest(r)
 		if authErr != nil {
 			hasAuth := r.Header.Get("Authorization") != ""
-			hasDeviceID := r.Header.Get("X-CCCode-Device-ID") != ""
+			hasDeviceID := r.Header.Get("X-CordCode-Device-ID") != ""
 			slog.Warn("go-bridge: auth failed",
 				"path", r.URL.Path,
 				"error", authErr,

@@ -1,7 +1,7 @@
 package gobridge
 
 const (
-	BridgeProtocolName           = "cccode-bridge"
+	BridgeProtocolName           = "cordcode-bridge"
 	BridgeProtocolVersion        = 1
 	BridgeProtocolSchemaRevision = "2026-05-07"
 )

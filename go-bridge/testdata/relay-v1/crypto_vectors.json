@@ -1,46 +1,4 @@
 {
-  "schemaRevision": "2026-05-24-r1",
-  "paddingByteHex": "a5",
-  "identity": {
-    "macPrivateKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
-    "macPublicKey": "e06Qm75//kTEZaIgA31gjuNYl9Me+XLwf3SJLLD3PxM=",
-    "iosPrivateKey": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=",
-    "iosPublicKey": "D6poTtKIZ7l/Smot7l34zpdOdrcBjj8iocTPJnhXDyA=",
-    "contextCanonical": "[\"brg_fixture\",\"dev_fixture\"]",
-    "identityAuthKey": "11aC/3GG/pRZOh7bjZcHyaJjPbVEoyFtZPWzgKdmA2E="
-  },
-  "online": {
-    "iosEphemeralPrivateKey": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=",
-    "iosEphemeralPublicKey": "ew1H2TQn+DERYHgcfHM/2J+IlwrvSQ2KoO4ZpMuKGxQ=",
-    "macEphemeralPrivateKey": "REREREREREREREREREREREREREREREREREREREREREQ=",
-    "macEphemeralPublicKey": "/y7kVgHsG2cxDHeQQEWFrmlzMe7hwfjPJBlzHB//Pms=",
-    "clientHelloCanonical": "{\"bridgeId\":\"brg_fixture\",\"channelGeneration\":12,\"clientRandom\":\"d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3c=\",\"deviceId\":\"dev_fixture\",\"iosEphemeralPublicKey\":\"ew1H2TQn+DERYHgcfHM/2J+IlwrvSQ2KoO4ZpMuKGxQ=\",\"protocol\":{\"name\":\"cccode-relay\",\"schemaRevision\":\"2026-05-24-r1\",\"version\":1},\"type\":\"online_client_hello\"}",
-    "clientAuthTag": "SpboHD8aoNGzb68Jclcp2RWHIFQqi10k2c/cUup1ujo=",
-    "serverHelloCanonical": "{\"bridgeId\":\"brg_fixture\",\"channelGeneration\":12,\"clientHelloHash\":\"DhVJHX5OtvtFJWGGSprXTcTrobNLj6A/2svZMloihDU=\",\"deviceId\":\"dev_fixture\",\"keyEpochId\":\"online:12\",\"macEphemeralPublicKey\":\"/y7kVgHsG2cxDHeQQEWFrmlzMe7hwfjPJBlzHB//Pms=\",\"serverRandom\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg=\",\"type\":\"online_server_hello\"}",
-    "serverAuthTag": "jkjpp2Gy60O80Np8FXlp62PKZ+DH1Veaai1lqEpd/g8=",
-    "transcriptHash": "cmaduAdPDn0SvPO09Sz/7TnOTf1RSZMs9eRvomClnRg=",
-    "iosToMacKey": "/jqrBYr3vaJUvPV84l/lkqBy//ZEmpfH5hCExXNP2Sg=",
-    "macToIosKey": "TMYjwNQG+z4IxzrnogiBatGkpPU1pwsDi9DgY2E+XjY=",
-    "innerPayload": "{\"type\":\"event\",\"event\":\"text_delta\",\"data\":{\"text\":\"hi\"}}",
-    "aadCanonical": "{\"channelGeneration\":12,\"counter\":1,\"createdAt\":\"2026-05-24T08:00:00Z\",\"destinationId\":\"dev_fixture\",\"epochAuthTag\":null,\"epochEphemeralPublicKey\":null,\"epochIndex\":null,\"expiresAt\":\"2026-05-25T08:00:00Z\",\"keyEpochId\":\"online:12\",\"messageId\":\"msg_online_1\",\"prekeyId\":null,\"previousEpochDigest\":null,\"routeId\":\"br_route_fixture\",\"senderId\":\"bridge\",\"version\":1}",
-    "nonce": "AAAAAAAAAAAAAAAB",
-    "ciphertext": "VJAVJHOTa29cVQwjJjFKg0vQOTpoWJZhESeWdYmV+F8xusNz48Aqmv4Y13kLXeapbldAa10Wo68MA0jiLufGbpcqWjlr2cwDOlsRnebHVy2kUL90jF9bl/ZlIaVenFC2rzTrdiM8GHZ+9G3YM3fY1fdxGOJZuFz1Ah4DMkpv0kHk4hezugL03aZuZjxNA6Kzi6E13OXllY01HAU8C6LpZj2B5euLKnziirpPrJO08d60I+FKURcVMlewpqaInw8MOMsZoYvcTItpyYlktZsw3ehFcyXzfwp3jeat5h7pr3xSxeYKAw4gPcXdwf3ltZ2t+Dlvoui+T/sbSDM2XJ9zncxB/wvmP5fERwugW3lNGiU="
-  },
-  "mailbox": {
-    "iosPrekeyPrivateKey": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
-    "iosPrekeyPublicKey": "OKtmS9hvd9fma92a4HkpE6lP2LM6EmACfktGwfSITGc=",
-    "macEpochPrivateKey": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=",
-    "macEpochPublicKey": "IZ5NgA2paNKl/LAJx4T0dGxxOO257khEtznoMLBc9CQ=",
-    "contextCanonical": "[\"brg_fixture\",\"dev_fixture\",\"pk_fixture\",7]",
-    "macToIosKey": "tFcXUQHcJQy353vnFkRGX7G0hOizYGhysJqE5alSMqg=",
-    "epochHeaderCanonical": "{\"epochIndex\":7,\"firstCounter\":1,\"frameCount\":1,\"lastCounter\":1,\"macEphemeralPublicKey\":\"IZ5NgA2paNKl/LAJx4T0dGxxOO257khEtznoMLBc9CQ=\",\"prekeyId\":\"pk_fixture\",\"previousEpochDigest\":\"\"}",
-    "epochAuthTag": "bWC7kLK5fNFPi5+QyQBS0cXmxoGe2O8o+v/9R2MXXP8=",
-    "epochDigest": "PMN5ku2GdQUMUmG5Oumn9DExJozNmhiWTJBW64/UnBo=",
-    "innerPayload": "{\"type\":\"event\",\"event\":\"turn_completed\",\"data\":{}}",
-    "aadCanonical": "{\"channelGeneration\":12,\"counter\":1,\"createdAt\":\"2026-05-24T08:00:00Z\",\"destinationId\":\"dev_fixture\",\"epochAuthTag\":\"bWC7kLK5fNFPi5+QyQBS0cXmxoGe2O8o+v/9R2MXXP8=\",\"epochEphemeralPublicKey\":\"IZ5NgA2paNKl/LAJx4T0dGxxOO257khEtznoMLBc9CQ=\",\"epochIndex\":7,\"expiresAt\":\"2026-05-25T08:00:00Z\",\"keyEpochId\":\"mailbox:7\",\"messageId\":\"msg_mailbox_1\",\"prekeyId\":\"pk_fixture\",\"previousEpochDigest\":\"\",\"routeId\":\"br_route_fixture\",\"senderId\":\"bridge\",\"version\":1}",
-    "nonce": "AAAAAAAAAAAAAAAB",
-    "ciphertext": "50kDkdgzfokNwdB8k6tJYCJe6DxJLLIcWJ0Rsu53S6v8SIq3L1febpqz+IKg4bh+agx9jPU18Lj51pD484pNWEydUx6LEJllOOmAjVTMU5g8IKhimF98KWjX7f9hiPriNohwIgwz/Q8y2HmbR0D0kDgXhDTqd2rW2LWCXkUQvGl1t/IDX3NwRnXX0PcGTsFJEl6tS8g2jnlo0zqsWFOvCugwjZWfM59SEyj3cRTz2jwfQn9CS03qZAQvy3MdK7fSZCh/BS0N25qafAdRWbK1lH3FkoGjNPBJGtoFVPBMTwc7UmKg2PPoGSwheSGVOMKwSBR8/pO+qBqnpAYjLpbUCyytMsGYDiMNuPAX2zn1C8k="
-  },
   "hpkeBaseMode": {
     "source": "RFC9180-test-vectors",
     "kemId": 32,
@@ -53,5 +11,47 @@
     "aadHex": "436f756e742d30",
     "plaintextHex": "4265617574792069732074727574682c20747275746820626561757479",
     "ciphertextHex": "1c5250d8034ec2b784ba2cfd69dbdb8af406cfe3ff938e131f0def8c8b60b4db21993c62ce81883d2dd1b51a28"
-  }
+  },
+  "identity": {
+    "contextCanonical": "[\"brg_fixture\",\"dev_fixture\"]",
+    "identityAuthKey": "AZ0V9zcd7tnvKA9HsFmETq7+Kg380tQlLs2dtJFB5ZE=",
+    "iosPrivateKey": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=",
+    "iosPublicKey": "D6poTtKIZ7l/Smot7l34zpdOdrcBjj8iocTPJnhXDyA=",
+    "macPrivateKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+    "macPublicKey": "e06Qm75//kTEZaIgA31gjuNYl9Me+XLwf3SJLLD3PxM="
+  },
+  "mailbox": {
+    "aadCanonical": "{\"channelGeneration\":12,\"counter\":1,\"createdAt\":\"2026-05-24T08:00:00Z\",\"destinationId\":\"dev_fixture\",\"epochAuthTag\":\"bWC7kLK5fNFPi5+QyQBS0cXmxoGe2O8o+v/9R2MXXP8=\",\"epochEphemeralPublicKey\":\"IZ5NgA2paNKl/LAJx4T0dGxxOO257khEtznoMLBc9CQ=\",\"epochIndex\":7,\"expiresAt\":\"2026-05-25T08:00:00Z\",\"keyEpochId\":\"mailbox:7\",\"messageId\":\"msg_mailbox_1\",\"prekeyId\":\"pk_fixture\",\"previousEpochDigest\":\"\",\"routeId\":\"br_route_fixture\",\"senderId\":\"bridge\",\"version\":1}",
+    "ciphertext": "duGN0CyaJu1MVNH5u1mcwgi2BJdGd6VHL98FsAvT9TQWv//NSCaU8sW1F9G+6duudmhXuRldiQzJpGNr8HMCCKOhhbdldMtFMz8MU3QyAwAL9Bx3Kfi04iuoieSyuQlUrQCllHSnX13rAw1GAHXKpL616kY+onUuS6OyagqBU0OKcph3I/5L+Is2oWB+q5g8J8Xi3aKrJeoRBhnMfy3LsVfW6rw3d9/3Oi1Ntb5qg72lWfVPu6YFFhHwRAOBXn5F0X15+mt1VNzwxFz8iMwXdBmpbrBk5/v7sxSASLsQ+aADVBNZKCZC4mXB0a0l1Lux7syWnfdz1lxlWI/89cxMfDPfWgA3GP9HIvHb5NoLuMk=",
+    "contextCanonical": "[\"brg_fixture\",\"dev_fixture\",\"pk_fixture\",7]",
+    "epochAuthTag": "93nG87VmPA+Twk6rmCtHNj5HfmtjoVyLWMdIL2S7yWo=",
+    "epochDigest": "NC0R5OtKsdCBkjWvA7Zeg9me8YOdSUYs1MmEy9NVNtM=",
+    "epochHeaderCanonical": "{\"epochIndex\":7,\"firstCounter\":1,\"frameCount\":1,\"lastCounter\":1,\"macEphemeralPublicKey\":\"IZ5NgA2paNKl/LAJx4T0dGxxOO257khEtznoMLBc9CQ=\",\"prekeyId\":\"pk_fixture\",\"previousEpochDigest\":\"\"}",
+    "innerPayload": "{\"type\":\"event\",\"event\":\"turn_completed\",\"data\":{}}",
+    "iosPrekeyPrivateKey": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
+    "iosPrekeyPublicKey": "OKtmS9hvd9fma92a4HkpE6lP2LM6EmACfktGwfSITGc=",
+    "macEpochPrivateKey": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=",
+    "macEpochPublicKey": "IZ5NgA2paNKl/LAJx4T0dGxxOO257khEtznoMLBc9CQ=",
+    "macToIosKey": "u+zJac+4Va+FGf4ZWRasELut/evTvwqaW0CK9bH+cKQ=",
+    "nonce": "AAAAAAAAAAAAAAAB"
+  },
+  "online": {
+    "aadCanonical": "{\"channelGeneration\":12,\"counter\":1,\"createdAt\":\"2026-05-24T08:00:00Z\",\"destinationId\":\"dev_fixture\",\"epochAuthTag\":null,\"epochEphemeralPublicKey\":null,\"epochIndex\":null,\"expiresAt\":\"2026-05-25T08:00:00Z\",\"keyEpochId\":\"online:12\",\"messageId\":\"msg_online_1\",\"prekeyId\":null,\"previousEpochDigest\":null,\"routeId\":\"br_route_fixture\",\"senderId\":\"bridge\",\"version\":1}",
+    "ciphertext": "biwPx0P1CyfEUTXgVihkZtHUFjENWhCGjik1ddEULsamDwU1bSEuuWKPcJoaxjjOifSaJiG5esypKsPd9v7w8jg/G/5VHUUjWERXTcL+dzTBymu1eDdgW+Jp2WK4xDjh+Bz5NnWLfTKkYGwlFu21mqdS+AT9KK86JRIIvyCawINI8FGc2WYPAzbewsAKX4z3emG+n8vuIk2c+eUCo/kBxPEmgH9UCHSUmlJnmZs5st5IzFT3US2/bbS5fCkK+wf4eiP+hag+z3ZYuThPYgTrH1yPJdaU0Md6DkiXVeYQI7EeYXcpL1qHCDC4KUIslAnp964yE3/1gtkN+M3yAGyad4AcehtWD1ZlPkpPJ2r0O6c=",
+    "clientAuthTag": "Q2szMl0IbmhiorXgKGLA96LtbOZHo5IY6HYiIB1vKSk=",
+    "clientHelloCanonical": "{\"bridgeId\":\"brg_fixture\",\"channelGeneration\":12,\"clientRandom\":\"d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3c=\",\"deviceId\":\"dev_fixture\",\"iosEphemeralPublicKey\":\"ew1H2TQn+DERYHgcfHM/2J+IlwrvSQ2KoO4ZpMuKGxQ=\",\"protocol\":{\"name\":\"cccode-relay\",\"schemaRevision\":\"2026-05-24-r1\",\"version\":1},\"type\":\"online_client_hello\"}",
+    "innerPayload": "{\"type\":\"event\",\"event\":\"text_delta\",\"data\":{\"text\":\"hi\"}}",
+    "iosEphemeralPrivateKey": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=",
+    "iosEphemeralPublicKey": "ew1H2TQn+DERYHgcfHM/2J+IlwrvSQ2KoO4ZpMuKGxQ=",
+    "iosToMacKey": "MVVq2emEvRZQHYeToA62fQdddI1fkynHiXdQhA/nOJ8=",
+    "macEphemeralPrivateKey": "REREREREREREREREREREREREREREREREREREREREREQ=",
+    "macEphemeralPublicKey": "/y7kVgHsG2cxDHeQQEWFrmlzMe7hwfjPJBlzHB//Pms=",
+    "macToIosKey": "NA6YpRgbL6WLy4SxUdpnM1BF2SjZQZYlnCUneLy9PDo=",
+    "nonce": "AAAAAAAAAAAAAAAB",
+    "serverAuthTag": "S6kRKDmi9gqRutrvsFeMqulPb1jvTIi5otFlRo3obeA=",
+    "serverHelloCanonical": "{\"bridgeId\":\"brg_fixture\",\"channelGeneration\":12,\"clientHelloHash\":\"DhVJHX5OtvtFJWGGSprXTcTrobNLj6A/2svZMloihDU=\",\"deviceId\":\"dev_fixture\",\"keyEpochId\":\"online:12\",\"macEphemeralPublicKey\":\"/y7kVgHsG2cxDHeQQEWFrmlzMe7hwfjPJBlzHB//Pms=\",\"serverRandom\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg=\",\"type\":\"online_server_hello\"}",
+    "transcriptHash": "cmaduAdPDn0SvPO09Sz/7TnOTf1RSZMs9eRvomClnRg="
+  },
+  "paddingByteHex": "a5",
+  "schemaRevision": "2026-05-24-r1"
 }

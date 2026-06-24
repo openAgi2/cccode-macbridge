@@ -1,0 +1,9 @@
+panic: runtime error: invalid memory address or nil pointer dereference
+[signal SIGSEGV: segmentation violation code=0x2 addr=0x28 pc=0x1008b212c]
+
+goroutine 1 [running]:
+crypto/ecdh.(*PrivateKey).PublicKey(...)
+	/Users/jacklee/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/src/crypto/ecdh/ecdh.go:167
+main.main()
+	/tmp/regen_vectors.go:106 +0x8c
+exit status 2

@@ -173,7 +173,7 @@ func TestApproveThenAuthConnect(t *testing.T) {
 			"deviceId": receivedDeviceID,
 		},
 		"protocol": map[string]any{
-			"name":                     "cccode-bridge",
+			"name":                     "cordcode-bridge",
 			"version":                  1,
 			"supportedSchemaRevisions": []string{"v1"},
 		},
@@ -239,7 +239,7 @@ func TestApproveThenAuthWithWrongToken(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/"
 	authHeader := http.Header{}
 	authHeader.Set("Authorization", "Bearer ccb1_wrongwrongwrongwrongwrongwrongwrongwrong")
-	authHeader.Set("X-CCCode-Device-ID", "dev_test")
+	authHeader.Set("X-CordCode-Device-ID", "dev_test")
 
 	resp, err := http.DefaultClient.Do(&http.Request{
 		Method: "GET",
@@ -262,7 +262,7 @@ func TestApproveThenAuthWithWrongToken(t *testing.T) {
 	// 用正确 token 连接应该成功
 	authHeader2 := http.Header{}
 	authHeader2.Set("Authorization", "Bearer "+plain)
-	authHeader2.Set("X-CCCode-Device-ID", "dev_test")
+	authHeader2.Set("X-CordCode-Device-ID", "dev_test")
 
 	conn, resp3, err3 := websocket.DefaultDialer.Dial(wsURL, authHeader2)
 	if err3 != nil {

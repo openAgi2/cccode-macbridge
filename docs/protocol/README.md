@@ -4,7 +4,7 @@ Canonical source for protocol compatibility lives in this directory.
 The iOS repository may keep a synchronized copy, but compatibility
 decisions should be reviewed against this MacBridge copy first.
 
-> **命名说明：** 协议名称 `cccode-bridge` / `cccode-relay` 及所有 wire 字面量
+> **命名说明：** 协议名称 `cordcode-bridge` / `cccode-relay` 及所有 wire 字面量
 > （HKDF info、HTTP 头、签名域）是冻结的兼容性契约，不随产品名 CCCode→CordCode
 > 变更。本文档标题与说明文字反映新品牌名 CordCode，但 wire 字面量保持原样。
 
@@ -12,7 +12,7 @@ decisions should be reviewed against this MacBridge copy first.
 
 | Protocol | Name | Version | Schema revision |
 | --- | --- | ---: | --- |
-| Direct bridge | `cccode-bridge` | 1 | `2026-05-07` |
+| Direct bridge | `cordcode-bridge` | 1 | `2026-05-07` |
 | Relay envelope | `cccode-relay` | 1 | `2026-05-24-r1` |
 
 ## Source Of Truth

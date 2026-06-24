@@ -565,7 +565,7 @@ func TestCrossPlatformMailboxKeyConsistency(t *testing.T) {
 	}
 
 	ctx := []byte(vectors.Mailbox.ContextCanonical)
-	mailboxRoot, err := hkdfExpand(shared, append([]byte("cccode-relay/mailbox/v1"), ctx...), 32)
+	mailboxRoot, err := hkdfExpand(shared, append([]byte("cordcode-relay/mailbox/v1"), ctx...), 32)
 	if err != nil {
 		t.Fatalf("mailbox root HKDF: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestCrossPlatformMailboxKeyConsistency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("iOS ECDH: %v", err)
 	}
-	iosMailboxRoot, err := hkdfExpand(sharedIOS, append([]byte("cccode-relay/mailbox/v1"), ctx...), 32)
+	iosMailboxRoot, err := hkdfExpand(sharedIOS, append([]byte("cordcode-relay/mailbox/v1"), ctx...), 32)
 	if err != nil {
 		t.Fatalf("iOS mailbox root HKDF: %v", err)
 	}

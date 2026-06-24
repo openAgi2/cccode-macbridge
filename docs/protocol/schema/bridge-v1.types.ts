@@ -1,4 +1,4 @@
-export type BridgeProtocolName = "cccode-bridge";
+export type BridgeProtocolName = "cordcode-bridge";
 
 export interface BridgeProtocol {
   name: BridgeProtocolName;
