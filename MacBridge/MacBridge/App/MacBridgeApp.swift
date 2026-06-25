@@ -3,6 +3,17 @@ import SwiftUI
 // App 退出时终止 go-bridge 子进程
 class AppDelegate: NSObject, NSApplicationDelegate {
     var runtimeManager: RuntimeManager?
+    /// M1: 通知协调器(由 MacBridgeApp.onAppear 注入),启动时请求通知授权。
+    var notificationCoordinator: NotificationCoordinator?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // M1: 请求系统通知授权(.alert/.sound/.badge)。
+        // NOTE: notificationCoordinator is assigned in MacBridgeApp.onAppear (below), which runs
+        // AFTER applicationDidFinishLaunching for SwiftUI apps. So it is nil here on first launch —
+        // requesting authorization here would silently no-op and notifications would never be granted
+        // (the real-world symptom: pairing claims never produced a system notification, only the
+        // dock-badge fallback). The actual request is made in onAppear right after assignment.
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         runtimeManager?.shutdownForExit()
@@ -32,7 +43,11 @@ struct MacBridgeApp: App {
             .environmentObject(dependencies)
             .onAppear {
                 appDelegate.runtimeManager = dependencies.runtimeManager
+                appDelegate.notificationCoordinator = dependencies.notificationCoordinator
                 dependencies.startBridge()
+                // M1: request notification authorization here (not in applicationDidFinishLaunching,
+                // where notificationCoordinator is still nil for SwiftUI apps — see note above).
+                appDelegate.notificationCoordinator?.requestAuthorization()
             }
         }
         .defaultSize(width: 960, height: 680)

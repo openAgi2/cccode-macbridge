@@ -11,6 +11,7 @@
 		0A0B7AE785F788173FEA48D0 /* OpenCodeCredentialsGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BE70B669DDB9B3C1522465B /* OpenCodeCredentialsGenerator.swift */; };
 		2E07EDF1D105A17DF1E32E1C /* AppDependencies.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDEFE8AC08BD94B695F061C5 /* AppDependencies.swift */; };
 		3020F78BE7732F1FB21E0F07 /* BackendManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4037A50A11C86B7ADD57AEC7 /* BackendManagementView.swift */; };
+		37041435E8DF4098E9803090 /* NotificationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2991FD84D19DF3530941541 /* NotificationCoordinator.swift */; };
 		37846593B76DF639E017EBF9 /* MacBridgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC7151BF29E1FD3CAC3A1B4 /* MacBridgeApp.swift */; };
 		447E4F6B2D40906387C480D3 /* ProductCopyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D520B55E2B0291B2A887DD34 /* ProductCopyTests.swift */; };
 		4B50BCF0B76C6FCCD9AEA84C /* ManagementAPIClientTimeoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC2125905A5A283AE86C6A43 /* ManagementAPIClientTimeoutTests.swift */; };
@@ -20,6 +21,7 @@
 		71351CD15777887FD222B7D5 /* BridgeStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B458091E2090B6530F3C0468 /* BridgeStatusView.swift */; };
 		786AA7E7D49157B38619003B /* RuntimeManagerRestartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC22FD66FBF5F720584F8421 /* RuntimeManagerRestartTests.swift */; };
 		7F1302ED24887EA2D603700C /* MacBridgeBehaviorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC64B170A23E565E7D8F8251 /* MacBridgeBehaviorTests.swift */; };
+		823404E84CB481A19EA410EB /* NotificationCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2FC3E11BEA5EE407C00BC1 /* NotificationCoordinatorTests.swift */; };
 		8852EA0A22819E2647C2557C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D1F477B62EC84313AF871E41 /* Assets.xcassets */; };
 		89D029E10473B44EAF99CC03 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2DA39E8464033D89C109974 /* SettingsView.swift */; };
 		8B6E4CF29205653096575DD6 /* BackendStatusViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4738E918EA61DF9B9286BDDE /* BackendStatusViewModel.swift */; };
@@ -54,6 +56,7 @@
 		383EF14F5096F2F068A24503 /* PairingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingViewModel.swift; sourceTree = "<group>"; };
 		3C7D5EABF711F9D1698D2B8E /* MenuBarMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarMenu.swift; sourceTree = "<group>"; };
 		3D63472C43A4F245F5009A40 /* ManagementAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagementAPIClient.swift; sourceTree = "<group>"; };
+		3F2FC3E11BEA5EE407C00BC1 /* NotificationCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationCoordinatorTests.swift; sourceTree = "<group>"; };
 		4037A50A11C86B7ADD57AEC7 /* BackendManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendManagementView.swift; sourceTree = "<group>"; };
 		4738E918EA61DF9B9286BDDE /* BackendStatusViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendStatusViewModel.swift; sourceTree = "<group>"; };
 		4F2414D249C8A25F8F5F81D5 /* BridgeStatusViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeStatusViewModel.swift; sourceTree = "<group>"; };
@@ -73,6 +76,7 @@
 		D524FA3A3584520B5645C83C /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
 		DC2125905A5A283AE86C6A43 /* ManagementAPIClientTimeoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagementAPIClientTimeoutTests.swift; sourceTree = "<group>"; };
 		EDEFE8AC08BD94B695F061C5 /* AppDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDependencies.swift; sourceTree = "<group>"; };
+		F2991FD84D19DF3530941541 /* NotificationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationCoordinator.swift; sourceTree = "<group>"; };
 		F2D28621DF47FFFEA3F80696 /* OpenCodeLaunchAgentCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeLaunchAgentCredentials.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -132,6 +136,7 @@
 				925DD08E60CAB8D17159E176 /* AppDependenciesTests.swift */,
 				AC64B170A23E565E7D8F8251 /* MacBridgeBehaviorTests.swift */,
 				DC2125905A5A283AE86C6A43 /* ManagementAPIClientTimeoutTests.swift */,
+				3F2FC3E11BEA5EE407C00BC1 /* NotificationCoordinatorTests.swift */,
 				D520B55E2B0291B2A887DD34 /* ProductCopyTests.swift */,
 				BC22FD66FBF5F720584F8421 /* RuntimeManagerRestartTests.swift */,
 			);
@@ -177,6 +182,7 @@
 			children = (
 				D524FA3A3584520B5645C83C /* Localization.swift */,
 				3D63472C43A4F245F5009A40 /* ManagementAPIClient.swift */,
+				F2991FD84D19DF3530941541 /* NotificationCoordinator.swift */,
 				BAAF39AC99F7BCB4449CD1B1 /* RuntimeManager.swift */,
 			);
 			path = Services;
@@ -297,6 +303,7 @@
 				6488DF459B5AA8758BD052D5 /* AppDependenciesTests.swift in Sources */,
 				7F1302ED24887EA2D603700C /* MacBridgeBehaviorTests.swift in Sources */,
 				4B50BCF0B76C6FCCD9AEA84C /* ManagementAPIClientTimeoutTests.swift in Sources */,
+				823404E84CB481A19EA410EB /* NotificationCoordinatorTests.swift in Sources */,
 				0A0B7AE785F788173FEA48D0 /* OpenCodeCredentialsGenerator.swift in Sources */,
 				D75F0766D4679AD85CC83AB9 /* OpenCodeLaunchAgentCredentials.swift in Sources */,
 				447E4F6B2D40906387C480D3 /* ProductCopyTests.swift in Sources */,
@@ -318,6 +325,7 @@
 				37846593B76DF639E017EBF9 /* MacBridgeApp.swift in Sources */,
 				CF8F96FB45BE884424D61687 /* ManagementAPIClient.swift in Sources */,
 				630534774DD5F13F50A40FB8 /* MenuBarMenu.swift in Sources */,
+				37041435E8DF4098E9803090 /* NotificationCoordinator.swift in Sources */,
 				060AAD30FED3CB9F10307692 /* OpenCodeCredentialsGenerator.swift in Sources */,
 				9DCAB02C23C6F97F756A87AC /* OpenCodeLaunchAgentCredentials.swift in Sources */,
 				8FAE152DB77346F49144328B /* PageContainer.swift in Sources */,

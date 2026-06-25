@@ -45,9 +45,26 @@ func addRelayFirstPairingPayload(session *PairingSession, endpoint, routeID stri
 	query.Set("relayRoute", qr.RouteID)
 	query.Set("relayBridgeKey", qr.BridgePubKey)
 	query.Set("relayFingerprint", qr.BridgeFP)
-	query.Set("relayCapability", "paircap_"+generateRandomString(32))
+	capability := "paircap_" + generateRandomString(32)
+	query.Set("relayCapability", capability)
 	parsed.RawQuery = query.Encode()
 	session.QRPayload = parsed.String()
+
+	// Flow C: also build a web-specific QR — the same pairing session re-encoded as an https URL
+	// the phone's system camera opens (https://<relay>/web/?<params>). Web is relay-only, so it
+	// carries id/code + the relay params (no LAN host/port). Param names match the iOS QR exactly,
+	// so remote-web's parsePairingParamsFromQuery reads them unchanged.
+	webQuery := url.Values{}
+	webQuery.Set("id", session.ID)
+	webQuery.Set("code", session.ManualCode)
+	webQuery.Set("relay", qr.RelayEndpoint)
+	webQuery.Set("relayRoute", qr.RouteID)
+	webQuery.Set("relayBridgeKey", qr.BridgePubKey)
+	webQuery.Set("relayFingerprint", qr.BridgeFP)
+	webQuery.Set("relayCapability", capability)
+	httpsHost := strings.Replace(endpoint, "wss://", "https://", 1)
+	httpsHost = strings.Replace(httpsHost, "ws://", "http://", 1)
+	session.WebQRPayload = strings.TrimRight(httpsHost, "/") + "/web/?" + webQuery.Encode()
 	return nil
 }
 

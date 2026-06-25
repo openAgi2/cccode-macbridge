@@ -139,7 +139,11 @@ export type BridgeRPCMethod =
   | "question_reject"
   | "get_delivery_prekey_status"
   | "upload_delivery_prekeys"
-  | "get_delivery_chain_head";
+  | "get_delivery_chain_head"
+  // Backfilled (M6): this method is registered in go-bridge handlers.go:699 but was missing from
+  // the canonical enum. Now present in all three consumers (iOS/MacBridge/remote-web).
+  // Capability string: "workspace_diff".
+  | "get_workspace_diff";
 
 export interface BridgeRequest<TParams = Record<string, unknown>> {
   type: "request";

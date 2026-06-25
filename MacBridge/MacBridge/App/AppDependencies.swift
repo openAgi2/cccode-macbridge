@@ -10,6 +10,7 @@ class AppDependencies: ObservableObject {
     let statusViewModel: BridgeStatusViewModel
     let pairingViewModel: PairingViewModel
     let settingsViewModel: SettingsViewModel
+    let notificationCoordinator: NotificationCoordinator
 
     private let dataDir: String
     private var hasStartedBridge = false
@@ -98,6 +99,11 @@ class AppDependencies: ObservableObject {
         self.statusViewModel = BridgeStatusViewModel()
         self.statusViewModel.runtimeManager = runtimeManager
         self.pairingViewModel = PairingViewModel()
+        // M1: 系统通知协调器,绑定到 PairingViewModel(claim 到达时发通知 + 一键 approve)。
+        let notificationCoordinator = NotificationCoordinator()
+        self.notificationCoordinator = notificationCoordinator
+        self.pairingViewModel.notificationCoordinator = notificationCoordinator
+        notificationCoordinator.pairingViewModel = self.pairingViewModel
         // SettingsViewModel 的 onCredentialsChanged 在 didLoad 中绑定，避免 init 阶段捕获 self
         self.settingsViewModel = SettingsViewModel(dataDir: dir, onCredentialsChanged: {})
 

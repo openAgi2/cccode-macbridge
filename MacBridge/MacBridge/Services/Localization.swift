@@ -164,6 +164,7 @@ enum L10n {
     static var pairingManagementUnavailable: String { tr("pairing_management_unavailable") }
     static var pairingInvalidExpiry: String { tr("pairing_invalid_expiry") }
     static var pairingUnknownDevice: String { tr("pairing_unknown_device") }
+    static var pairingRequestTitle: String { tr("pairing_request_title") }
     static var pairingQRCode: String { tr("pairing_qr_code") }
     static var pairingStepScan: String { tr("pairing_step_scan") }
     static var pairingStepConfirm: String { tr("pairing_step_confirm") }
@@ -180,6 +181,11 @@ enum L10n {
     static var pairingAdvancedPath: String { tr("pairing_advanced_path") }
     static var copyPairingLink: String { tr("copy_pairing_link") }
     static var pairingLinkCopied: String { tr("pairing_link_copied") }
+    // Flow C: web QR (https URL) shown alongside the iOS QR.
+    static var pairingQRTarget: String { tr("pairing_qr_target") }
+    static var pairingQRTargetIOS: String { tr("pairing_qr_target_ios") }
+    static var pairingQRTargetWeb: String { tr("pairing_qr_target_web") }
+    static var pairingWebQRHint: String { tr("pairing_web_qr_hint") }
 
 
     // MARK: - Devices
@@ -435,6 +441,7 @@ enum L10n {
             "security_hint_3": "Pairing codes expire after a few minutes.",
             "bridge_label": "Bridge: %@",
             "device_request": "Device Request",
+            "pairing_request_title": "Pairing Request",
             "approve": "Authorize Mobile Device",
             "reject": "Reject",
             "device_paired_successfully": "Device paired successfully",
@@ -463,6 +470,10 @@ enum L10n {
             "pairing_advanced_path": "Advanced Connection",
             "copy_pairing_link": "Copy Pairing Link",
             "pairing_link_copied": "Copied",
+            "pairing_qr_target": "Pairing code",
+            "pairing_qr_target_ios": "iOS",
+            "pairing_qr_target_web": "Web",
+            "pairing_web_qr_hint": "Scan with your phone camera — it opens the web client in the browser.",
 
             "authorized_devices": "Authorized Devices",
             "no_authorized_devices": "No authorized devices. Use the pairing section above to add one.",
@@ -691,6 +702,7 @@ enum L10n {
             "security_hint_3": "配对码几分钟后会过期。",
             "bridge_label": "Bridge：%@",
             "device_request": "设备请求",
+            "pairing_request_title": "配对请求",
             "approve": "授权移动端设备",
             "reject": "拒绝",
             "device_paired_successfully": "设备配对成功",
@@ -719,6 +731,10 @@ enum L10n {
             "pairing_advanced_path": "高级连接",
             "copy_pairing_link": "复制配对链接",
             "pairing_link_copied": "已复制",
+            "pairing_qr_target": "配对码",
+            "pairing_qr_target_ios": "iOS",
+            "pairing_qr_target_web": "Web",
+            "pairing_web_qr_hint": "用手机相机扫码,会自动在浏览器打开网页客户端。",
 
             "authorized_devices": "已授权设备",
             "no_authorized_devices": "暂无已授权设备。使用上方的配对区域添加设备。",

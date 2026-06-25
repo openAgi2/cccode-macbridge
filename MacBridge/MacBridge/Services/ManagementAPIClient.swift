@@ -89,6 +89,9 @@ struct ShutdownResponse: Codable {
 struct PairingSessionInfo: Codable {
     let id: String
     let qrPayload: String
+    /// Flow C web-specific QR (https URL the phone's system camera opens). Relay-only; absent
+    /// (empty) when relay is not configured. Same pairing session as qrPayload. See web pairing QR.
+    let webQrPayload: String?
     let manualCode: String
     let expiresAt: String
 }

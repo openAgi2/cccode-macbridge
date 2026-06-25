@@ -16,12 +16,19 @@ enum PairingUIState: Equatable {
 class PairingViewModel: ObservableObject {
     @Published var uiState: PairingUIState = .idle
     @Published var qrPayload = ""
+    /// Flow C: web-specific QR (https URL for the phone's system camera). Empty until a session
+    /// with relay configured is created; empty when relay is not configured.
+    @Published var webQrPayload = ""
     @Published var manualCode = ""
     @Published var claimedDeviceName = ""
     @Published var claimedPlatform = ""
     @Published private(set) var remainingSeconds: Int?
 
     var onApproved: (() async -> Void)?
+
+    /// 系统通知协调器(M1):claim 到达时发通知 + 一键 approve。
+    /// 弱持有,避免循环。AppDependencies 在创建后注入。
+    weak var notificationCoordinator: NotificationCoordinator?
 
     private var apiClient: PairingAPIProviding?
     private var pollingTimer: Timer?
@@ -60,6 +67,7 @@ class PairingViewModel: ObservableObject {
                 currentSessionId = session.id
                 manualCode = session.manualCode
                 qrPayload = session.qrPayload
+                webQrPayload = session.webQrPayload ?? ""
                 uiState = .waitingForClaim(
                     sessionId: session.id,
                     manualCode: session.manualCode,
@@ -107,6 +115,7 @@ class PairingViewModel: ObservableObject {
         expiresAt = nil
         remainingSeconds = nil
         qrPayload = ""
+        webQrPayload = ""
         manualCode = ""
         claimedDeviceName = ""
         claimedPlatform = ""
@@ -194,13 +203,20 @@ class PairingViewModel: ObservableObject {
             claimedPlatform = status.claimingPlatform ?? ""
             stopPairingActivity()
             uiState = .claimed(deviceName: claimedDeviceName, platform: claimedPlatform)
+            // M1: 发系统通知 + 一键 approve(把"用户必须盯着配对窗口"压到"系统通知几秒响应")。
+            notificationCoordinator?.notifyPairingClaimed(
+                deviceName: claimedDeviceName,
+                platform: claimedPlatform
+            )
         case "approved":
             stopPairingActivity()
             uiState = .approved
+            notificationCoordinator?.clearPairingNotifications()
             await onApproved?()
         case "rejected":
             stopPairingActivity()
             uiState = .rejected
+            notificationCoordinator?.clearPairingNotifications()
         case "expired":
             expireSession()
         default:

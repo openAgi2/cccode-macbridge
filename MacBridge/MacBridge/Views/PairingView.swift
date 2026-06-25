@@ -7,6 +7,8 @@ struct PairingView: View {
     @State private var copiedCode = false
     @State private var copiedLink = false
     @State private var isDetailsExpanded = false
+    /// Flow C: which QR to show — the iOS deep-link code or the web https code.
+    @State private var qrTarget: PairingQRTarget = .ios
 
 
     private struct PairingCandidate: Identifiable {
@@ -14,6 +16,19 @@ struct PairingView: View {
         let title: String
         let url: String
         let icon: String
+    }
+
+    /// Which QR surface the pairing view is showing.
+    private enum PairingQRTarget: String, CaseIterable, Identifiable {
+        case ios
+        case web
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .ios: return L10n.pairingQRTargetIOS
+            case .web: return L10n.pairingQRTargetWeb
+            }
+        }
     }
 
     var body: some View {
@@ -75,22 +90,43 @@ struct PairingView: View {
     }
 
     private func waitingView(code: String, payload: String) -> some View {
-        ViewThatFits(in: .horizontal) {
+        let webPayload = viewModel.webQrPayload
+        let activePayload: String = (qrTarget == .web && !webPayload.isEmpty) ? webPayload : payload
+        return ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: 28) {
-                qrSection(payload: payload)
+                qrSection(payload: activePayload, webPayload: webPayload)
                 waitingInstructions(code: code, payload: payload)
             }
             VStack(alignment: .leading, spacing: 20) {
-                qrSection(payload: payload)
+                qrSection(payload: activePayload, webPayload: webPayload)
                 waitingInstructions(code: code, payload: payload)
             }
         }
     }
 
-    private func qrSection(payload: String) -> some View {
+    private func qrSection(payload: String, webPayload: String) -> some View {
         VStack(alignment: .center, spacing: 12) {
+            // Flow C: offer the web QR alongside the iOS QR (same session). Hidden when relay isn't
+            // configured (no web payload).
+            if !webPayload.isEmpty {
+                Picker(L10n.pairingQRTarget, selection: $qrTarget) {
+                    ForEach(PairingQRTarget.allCases) { target in
+                        Text(target.label).tag(target)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel(L10n.pairingQRTarget)
+                if qrTarget == .web {
+                    Text(L10n.pairingWebQRHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+
             qrImage(payload: payload)
-            
+
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(payload, forType: .string)
@@ -107,7 +143,7 @@ struct PairingView: View {
             }
             .buttonStyle(.bordered)
             .help(copiedLink ? L10n.pairingLinkCopied : L10n.copyPairingLink)
-            
+
             Button(L10n.back) {
                 viewModel.reset()
             }

@@ -500,6 +500,29 @@ for the device.
 在该决策完成之前，已有设备可信直连升级可继续开发；新设备 Relay pairing
 MUST 保持 disabled。不得用自制 X25519 信封或静态密钥路径假装满足 HPKE 门禁。
 
+### 12.2 Web pairing QR (Flow C)
+
+Browsers cannot register the `cccode://` deep link, so the web client uses a separate
+**web pairing QR**: the same pairing session re-encoded as an `https` URL that the phone's
+system camera opens directly. MacBridge emits it alongside the iOS QR (same `id`/`code` and
+relay trust root; one session, two codes). The web is Relay-only, so the web QR carries no
+LAN-only fields (`host`/`port`/`name`/`remote`):
+
+```
+https://<relay-https-host>/web/?id=<pairingID>&code=<manualCode>&relay=<endpoint>&relayRoute=<routeID>&relayBridgeKey=<bridgePubKey>&relayFingerprint=<bridgeFingerprint>&relayCapability=<capability>
+```
+
+- `<relay-https-host>` is `relayEndpoint` (`wss://…`) with the scheme rewritten to `https://`,
+  serving both the public `wss://` endpoint and the `/web/` static client.
+- Param names are identical to the iOS `cccode://pair?…` QR, so the same parser
+  (`parsePairingParamsFromQuery`) reads either surface.
+- The params are NOT secret — they are already present in the QR, and the real gate is
+  MacBridge approval (§12). The web client strips them from the URL via
+  `history.replaceState` immediately after reading them, so they do not persist in browser
+  history; residual exposure is the relay's nginx access log, held by the relay operator.
+- Wire field: `PairingSession.webQrPayload` (JSON `webQrPayload`, `omitempty` — absent when
+  Relay is not configured, in which case MacBridge does not offer the Web QR).
+
 ## 13. Fixture 与实现门禁
 
 Before enabling Relay code paths, both Go and Swift tests MUST consume shared vectors for:

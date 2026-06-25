@@ -436,6 +436,44 @@ func TestMgmtPairingCreateIncludesRelayFirstQRWhenConfigured(t *testing.T) {
 	if query.Get("relayBridgeKey") == "" || query.Get("relayCapability") == "" {
 		t.Fatalf("relay security QR fields missing: %s", session.QRPayload)
 	}
+
+	// Flow C: the same session must also carry a web-specific QR (https URL for the phone's
+	// system camera). Assert it's present in the JSON response and well-formed.
+	if session.WebQRPayload == "" {
+		t.Fatalf("webQrPayload missing from pairing/create response (qrPayload=%s)", session.QRPayload)
+	}
+	// Re-decode the raw JSON to confirm the wire field name is webQrPayload.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["webQrPayload"]; !ok {
+		t.Fatalf("response JSON has no webQrPayload key; keys=%v", mapKeys(raw))
+	}
+	webQ, err := url.Parse(session.WebQRPayload)
+	if err != nil {
+		t.Fatalf("webQrPayload not a valid URL: %v (%q)", err, session.WebQRPayload)
+	}
+	if webQ.Scheme != "https" || webQ.Host != "relay.example.com:8443" {
+		t.Errorf("webQrPayload scheme/host = %s://%s, want https://relay.example.com:8443", webQ.Scheme, webQ.Host)
+	}
+	wq := webQ.Query()
+	for _, k := range []string{"id", "code", "relay", "relayRoute", "relayBridgeKey", "relayFingerprint", "relayCapability"} {
+		if wq.Get(k) == "" {
+			t.Errorf("webQrPayload missing param %q (%q)", k, session.WebQRPayload)
+		}
+	}
+	if wq.Get("id") != session.ID {
+		t.Errorf("webQrPayload id = %q, want session.ID %q", wq.Get("id"), session.ID)
+	}
+}
+
+func mapKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func TestMgmtRelayFirstClaimApprovalProducesSealedResult(t *testing.T) {
