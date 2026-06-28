@@ -7,6 +7,7 @@
     "runtimeVersion": "0.1.0-dev",
     "currentURLs": {
       "local": "ws://192.168.1.25:8777/bridge",
+      "locals": ["ws://192.168.1.26:8777/bridge"],
       "remote": null
     },
     "protocol": {

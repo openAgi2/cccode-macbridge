@@ -189,16 +189,17 @@ func (c *Conn) CloseWithControl(code int, reason string) error {
 
 // Server manages WebSocket connections.
 type Server struct {
-	authMiddleware *AuthMiddleware
-	handlers       *Handlers
-	activeConns    *ActiveConnRegistry
-	bridgeID       string
-	displayName    string
-	runtimeVersion string
-	localURL       string
-	remoteURL      string
-	remoteURLs     []string
-	detectionCfg   *AgentDetectionConfig
+	authMiddleware     *AuthMiddleware
+	handlers           *Handlers
+	activeConns        *ActiveConnRegistry
+	bridgeID           string
+	displayName        string
+	runtimeVersion     string
+	localURL           string
+	remoteURL          string
+	remoteURLs         []string
+	localCandidateURLs []string
+	detectionCfg       *AgentDetectionConfig
 }
 
 // SetAuthMiddleware 设置认证中间件，nil 表示不启用认证。
@@ -215,6 +216,11 @@ func (s *Server) SetBridgeIdentity(bridgeID, displayName, runtimeVersion, localU
 	s.remoteURL = remoteURL
 	s.remoteURLs = uniqueNonEmptyStrings(append([]string{remoteURL}, remoteURLs...))
 	s.handlers.SetBridgeID(bridgeID)
+}
+
+// SetLocalCandidateURLs 设置 LAN 直连候选列表,用于 hello_ack.currentURLs.locals(secondary 候选)。
+func (s *Server) SetLocalCandidateURLs(urls []string) {
+	s.localCandidateURLs = uniqueNonEmptyStrings(urls)
 }
 
 // SetDetectionConfig 设置 agent 检测配置。
@@ -421,6 +427,7 @@ func (s *Server) handleHello(conn *Conn, msg *WireMessage) {
 		s.localURL,
 		s.remoteURL,
 		s.remoteURLs,
+		s.localCandidateURLs,
 		agents,
 		codexMode,
 		s.detectionCfg,

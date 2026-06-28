@@ -23,6 +23,11 @@ type RelayFirstResult struct {
 	BridgeIdentityPublicKey string `json:"bridgeIdentityPublicKey"`
 	BridgeFingerprint       string `json:"bridgeFingerprint"`
 	ChannelGeneration       uint64 `json:"channelGeneration"`
+	// LocalURLs 是 Mac 当前 LAN 直连候选(ws://<lan-ip>:<port>/bridge),主候选(advertisedLocalURL)排在最前。
+	// iOS 取 [0] 为 SavedBridge.localURL(primary),其余为 localURLs(secondary)。
+	// 空表示 Mac 不在任何 LAN(纯 relay);iOS 此时保持 localURL=relayEndpoint 占位。
+	// 不承载 Tailscale 候选(需独立 TLS pin,relay-first completion 本期不下发 pin)。
+	LocalURLs []string `json:"localUrls,omitempty"`
 }
 
 type relayPendingClaim struct {
@@ -143,6 +148,7 @@ func (s *ManagementServer) approveRelayPairing(ctx context.Context, session *Pai
 		BridgeIdentityPublicKey: base64.StdEncoding.EncodeToString(s.cfg.RelayIdentity.PublicKeyBytes()),
 		BridgeFingerprint:       s.cfg.RelayIdentity.Fingerprint(),
 		ChannelGeneration:       1,
+		LocalURLs:               s.cfg.LocalURLs,
 	}
 	plaintext, err := json.Marshal(result)
 	if err != nil {

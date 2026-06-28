@@ -61,6 +61,18 @@ export interface BridgeBackendInfo {
   capabilities?: string[];
   descriptor?: Record<string, string>;
   permissionMode?: { mode?: string };
+  /**
+   * Backend availability status + reason, emitted by go-bridge AgentProviderDescriptor
+   * (agent_descriptor.go:31). status is "available"/"unavailable"/...; reason explains why a
+   * backend is not available (e.g. not installed / not running). Consumers surface unavailable
+   * backends as disabled-with-reason rather than hiding them.
+   */
+  status?: string;
+  reason?: string;
+  /** Live-event transport mode the backend advertises (AgentProviderDescriptor.LiveEvents). */
+  liveEvents?: string;
+  /** Whether the client must poll to observe externally-initiated turns (AgentProviderDescriptor). */
+  requiresPollingForExternalTurns?: boolean;
 }
 
 export interface BridgeHelloAck {
@@ -72,6 +84,9 @@ export interface BridgeHelloAck {
     runtimeVersion: string;
     currentURLs: {
       local: string;
+      // Secondary LAN direct candidates (ws://<lan-ip>:<port>/bridge); local is the primary.
+      // Does not carry Tailscale candidates (those need a separate TLS pin).
+      locals?: string[];
       remote?: string | null;
       remotes?: string[];
     };

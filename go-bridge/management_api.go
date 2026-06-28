@@ -24,14 +24,16 @@ var httpReadHeaderTimeout = 10 * time.Second
 // ── 管理 API 配置 ───────────────────────────────────────────────────────────
 // ManagementConfig 包含创建 ManagementServer 所需的全部依赖。
 type ManagementConfig struct {
-	Handlers         *Handlers
-	Token            string
-	DataDir          *DataDir
-	PairingStore     PairingSessionStore
-	DeviceStore      TrustedDeviceStore
-	BridgeID         string
-	DisplayName      string
-	LocalURL         string
+	Handlers     *Handlers
+	Token        string
+	DataDir      *DataDir
+	PairingStore PairingSessionStore
+	DeviceStore  TrustedDeviceStore
+	BridgeID     string
+	DisplayName  string
+	LocalURL     string
+	// LocalURLs 是 Mac 全部 LAN 直连候选(主候选在前),用于 relay-first completion(RelayFirstResult.LocalURLs)。
+	LocalURLs        []string
 	TailscaleURL     string
 	RemoteURL        string
 	IncludeTailscale bool

@@ -1,6 +1,10 @@
 package gobridge
 
-import "github.com/openAgi2/cordcode-macbridge/core"
+import (
+	"strings"
+
+	"github.com/openAgi2/cordcode-macbridge/core"
+)
 
 // HelloMessage 是客户端发送的握手消息。
 type HelloMessage struct {
@@ -57,6 +61,10 @@ type HelloURLs struct {
 	Local   string   `json:"local"`
 	Remote  string   `json:"remote"`
 	Remotes []string `json:"remotes,omitempty"`
+	// Locals 是除 Local(primary)外的其余 LAN 直连候选(ws://<lan-ip>:<port>/bridge)。
+	// 与 schema BridgeV1CurrentURLs.Locals 描述同一 hello_ack.bridge.currentURLs 字段。
+	// 不承载 Tailscale 候选(需独立 TLS pin);本期只通告普通 LAN ws://。
+	Locals []string `json:"locals,omitempty"`
 }
 
 // HandleHello 处理 hello 握手，构建 hello_ack 响应。
@@ -71,7 +79,7 @@ func HandleHello(
 	detectionCfg *AgentDetectionConfig,
 	sessions *sessionRegistry,
 ) *HelloAckMessage {
-	return HandleHelloWithRemoteURLs(hello, device, bridgeID, displayName, runtimeVersion, localURL, remoteURL, nil, agents, codexBackendMode, detectionCfg, sessions)
+	return HandleHelloWithRemoteURLs(hello, device, bridgeID, displayName, runtimeVersion, localURL, remoteURL, nil, nil, agents, codexBackendMode, detectionCfg, sessions)
 }
 
 func HandleHelloWithRemoteURLs(
@@ -79,6 +87,7 @@ func HandleHelloWithRemoteURLs(
 	device *TrustedDeviceRecord,
 	bridgeID, displayName, runtimeVersion, localURL, remoteURL string,
 	remoteURLs []string,
+	localURLs []string,
 	agents map[string]core.Agent,
 	codexBackendMode string,
 	detectionCfg *AgentDetectionConfig,
@@ -105,6 +114,7 @@ func HandleHelloWithRemoteURLs(
 			Local:   localURL,
 			Remote:  remoteURL,
 			Remotes: uniqueNonEmptyStrings(append([]string{remoteURL}, remoteURLs...)),
+			Locals:  filterOutString(localURLs, localURL),
 		},
 		Protocol: HelloAckProtocol{
 			Name:           BridgeProtocolName,
@@ -182,4 +192,24 @@ func classifyLocalURLSecurity(localURL string) *BridgeV1SecurityProfile {
 		IsTailscaleCGNAT: analysis.IsTailscaleCGNAT,
 		IsPublicWS:       analysis.IsPublicWS,
 	}
+}
+
+// filterOutString 返回 ss 中不等于 exclude 的非空、去重项。
+// 用于从 LAN 候选集合剔除 primary(= localURL),使 HelloURLs.Locals 仅承载 secondary 候选,
+// 与保留为单数 primary 的 Local 字段语义一致。
+func filterOutString(ss []string, exclude string) []string {
+	var out []string
+	seen := make(map[string]struct{})
+	for _, s := range ss {
+		s = strings.TrimSpace(s)
+		if s == "" || s == exclude {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }

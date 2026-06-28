@@ -168,6 +168,10 @@ func Main() {
 		os.Exit(1)
 	}
 	advertisedLocalURL := BuildBridgeLocalURL(ResolveAdvertisedHost(), *port)
+	// advertisedLocalURLs:全部 LAN 直连候选(主候选 advertisedLocalURL 在前),用于 relay-first completion
+	// (RelayFirstResult.LocalURLs,iOS 取 [0] 为 primary)与 hello_ack locals。空表示 Mac 不在任何 LAN(纯 relay)。
+	// 不含 Tailscale 候选(需独立 TLS pin,relay-first completion 本期不下发 pin)。
+	advertisedLocalURLs := BuildBridgeLocalURLs(*port)
 
 	// 自动检测 Tailscale IP 作为独立远程候选，不覆盖手动配置的 FRP/VPS URL。
 	// 决策逻辑见 resolveTailscaleRemote：产品模式 TLS 不可用不降级为 ws://（P1-4 fail-closed）。
@@ -205,6 +209,7 @@ func Main() {
 			BridgeID:         bridgeID,
 			DisplayName:      displayName,
 			LocalURL:         advertisedLocalURL,
+			LocalURLs:        advertisedLocalURLs,
 			TailscaleURL:     tailscaleURL,
 			RemoteURL:        *remoteURL,
 			IncludeTailscale: *includeTailscale,
@@ -259,6 +264,7 @@ func Main() {
 		firstNonEmpty(remoteIdentityURLs(tailscaleURL, *remoteURL, *includeTailscale, *includeRemote)...),
 		remoteIdentityURLs(tailscaleURL, *remoteURL, *includeTailscale, *includeRemote)...,
 	)
+	server.SetLocalCandidateURLs(advertisedLocalURLs)
 	server.SetDetectionConfig(&AgentDetectionConfig{
 		OpenCodeURL:       *ocBaseURL,
 		OpenCodeUser:      *ocUser,
@@ -289,6 +295,7 @@ func Main() {
 			server.localURL,
 			server.remoteURL,
 			server.remoteURLs,
+			server.localCandidateURLs,
 			handlers.Agents(),
 			handlers.CodexBackendMode(),
 			server.detectionCfg,

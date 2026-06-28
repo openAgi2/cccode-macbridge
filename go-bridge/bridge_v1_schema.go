@@ -29,6 +29,10 @@ type BridgeV1CurrentURLs struct {
 	Local   string   `json:"local"`
 	Remote  *string  `json:"remote"`
 	Remotes []string `json:"remotes,omitempty"`
+	// Locals 是除 Local(primary)外的其余 LAN 直连候选(ws://<lan-ip>:<port>/bridge)。
+	// 与运行时 HelloURLs.Locals 描述同一 hello_ack.bridge.currentURLs;本字段防 payload 与 contract 漂移。
+	// 不承载 Tailscale 候选(需独立 TLS pin);本期只通告普通 LAN ws://。
+	Locals []string `json:"locals,omitempty"`
 }
 
 type BridgeV1BridgeProfile struct {
@@ -41,11 +45,11 @@ type BridgeV1BridgeProfile struct {
 }
 
 type BridgeV1SecurityProfile struct {
-	Level            string         `json:"level"`
-	Scheme           string         `json:"scheme,omitempty"`
-	HostCategory     string         `json:"hostCategory,omitempty"`
-	IsTailscaleCGNAT bool           `json:"isTailscaleCGNAT,omitempty"`
-	IsPublicWS       bool           `json:"isPublicWS,omitempty"`
+	Level            string          `json:"level"`
+	Scheme           string          `json:"scheme,omitempty"`
+	HostCategory     string          `json:"hostCategory,omitempty"`
+	IsTailscaleCGNAT bool            `json:"isTailscaleCGNAT,omitempty"`
+	IsPublicWS       bool            `json:"isPublicWS,omitempty"`
 	TLSPin           *BridgeV1TLSPin `json:"tlsPin,omitempty"`
 }
 
@@ -55,10 +59,10 @@ type BridgeV1SecurityProfile struct {
 // iOS 据此对 Tailscale wss:// 自签名证书做 SPKI pinning（relay 路径不经此 pin）。
 // 字段语义见 docs/2026-06-19-t00-tlspin-owner-unblock-spec.md §2。
 type BridgeV1TLSPin struct {
-	Algorithm                string `json:"algorithm"`                // 固定 "sha256-spki"
-	Value                    string `json:"value"`                    // base64(SHA256(SPKI))
-	Generation               uint64 `json:"generation"`               // 单调递增；回退 iOS 拒绝
-	PreviousValue            string `json:"previousValue,omitempty"`  // 轮换窗口内的旧 pin
+	Algorithm                string `json:"algorithm"`                    // 固定 "sha256-spki"
+	Value                    string `json:"value"`                        // base64(SHA256(SPKI))
+	Generation               uint64 `json:"generation"`                   // 单调递增；回退 iOS 拒绝
+	PreviousValue            string `json:"previousValue,omitempty"`      // 轮换窗口内的旧 pin
 	PreviousValidUntilMillis int64  `json:"previousValidUntil,omitempty"` // Unix epoch ms；窗口结束后 iOS 拒绝 previous
 }
 
