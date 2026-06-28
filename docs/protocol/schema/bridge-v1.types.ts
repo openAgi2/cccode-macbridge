@@ -228,6 +228,18 @@ export interface BridgeListSessionsParams {
   cursor?: string;
 }
 
+/** Minimal session info returned by list_sessions/get_session. */
+export interface BridgeSessionInfo {
+  id: string;
+  title: string;
+  directory?: string;
+  modelId?: string;
+  providerId?: string;
+  effectiveModelId?: string;
+  effectiveProviderId?: string;
+  reasoningEffort?: string;
+}
+
 export interface BridgeListSessionsResult {
   sessions: BridgeSessionInfo[];
   nextCursor?: string; // present when hasMore is true

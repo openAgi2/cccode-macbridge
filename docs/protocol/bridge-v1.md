@@ -220,6 +220,10 @@ The cursor is an opaque, versioned encoding of the backend's stable composite so
 (`updatedAtMillis` DESC, `sessionId` ASC). It is never just a timestamp. A malformed or stale cursor
 degrades to the first page rather than failing the request, because the list is cheap to re-fetch.
 
+`SessionInfo` may include optional model metadata for clients that want to restore the selector when
+opening history: `modelId`, `providerId`, `effectiveModelId`, `effectiveProviderId`, and
+`reasoningEffort`. Older clients ignore these fields.
+
 ### `get_session_messages` paging
 
 Request params (additive; `paginate`, `beforeCursor` are new):

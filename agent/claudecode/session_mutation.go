@@ -197,7 +197,9 @@ func scanClaudeSessionMeta(path, projectDir, sessionID string) (claudeSessionMet
 				continue
 			}
 			userCount++
-			summary = visibleText
+			if summary == "" {
+				summary = visibleText
+			}
 		default:
 			continue
 		}

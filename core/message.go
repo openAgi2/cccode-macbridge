@@ -39,9 +39,9 @@ func MergeEnv(base, extra []string) []string {
 // NOTE: provider data-plane secrets (ANTHROPIC_API_KEY etc.) are NOT here —
 // agents need those to authenticate. Only control-plane keys are rejected.
 var controlPlaneEnvDenyPrefixes = []string{
-	"CCCODE_",            // go-bridge control plane (management token, relay creds, ...)
-	"OPENCODE_SERVER_",   // OpenCode HTTP API auth (server username/password)
-	"CLAUDECODE",         // nested-session detection marker (claudecode bridge)
+	"CCCODE_",          // go-bridge control plane (management token, relay creds, ...)
+	"OPENCODE_SERVER_", // OpenCode HTTP API auth (server username/password)
+	"CLAUDECODE",       // nested-session detection marker (claudecode bridge)
 }
 
 // controlPlaneEnvDenyExact are full env var names that must never reach an
@@ -434,11 +434,14 @@ type AgentDescriptor struct {
 
 // AgentSessionInfo describes one session as reported by the agent backend.
 type AgentSessionInfo struct {
-	ID           string
-	Summary      string
-	MessageCount int
-	ModifiedAt   time.Time `json:"modified_at"`
-	ArchivedAt   time.Time `json:"archived_at,omitempty"`
-	GitBranch    string
-	Directory    string
+	ID              string
+	Summary         string
+	MessageCount    int
+	ModifiedAt      time.Time `json:"modified_at"`
+	ArchivedAt      time.Time `json:"archived_at,omitempty"`
+	GitBranch       string
+	Directory       string
+	ModelID         string
+	ProviderID      string
+	ReasoningEffort string
 }

@@ -22,14 +22,17 @@ type claudeSessionFingerprint struct {
 }
 
 type claudeSessionIndexEntry struct {
-	Key          claudeSessionKey
-	FilePath     string
-	Directory    string
-	Title        string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	MessageCount int
-	Fingerprint  claudeSessionFingerprint
+	Key             claudeSessionKey
+	FilePath        string
+	Directory       string
+	Title           string
+	ModelID         string
+	ProviderID      string
+	ReasoningEffort string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	MessageCount    int
+	Fingerprint     claudeSessionFingerprint
 }
 
 type claudeSessionSnapshot struct {
@@ -44,13 +47,13 @@ type claudeSessionCatalog struct {
 	snapshot *claudeSessionSnapshot
 	inFlight chan struct{}
 
-	parseSummary func(string, time.Time) (string, time.Time, time.Time)
+	parseSession func(string, time.Time) claudeSessionScanResult
 }
 
 func newClaudeSessionCatalog(projectsDir string) *claudeSessionCatalog {
 	return &claudeSessionCatalog{
 		projectsDir:  projectsDir,
-		parseSummary: scanClaudeSessionSummary,
+		parseSession: scanClaudeSessionMetadata,
 	}
 }
 
@@ -193,16 +196,19 @@ func (c *claudeSessionCatalog) buildSnapshot(
 		}
 		changed++
 		parseStarted := time.Now()
-		title, createdAt, updatedAt := c.parseSummary(candidate.path, candidate.modTime)
+		scan := c.parseSession(candidate.path, candidate.modTime)
 		metrics.AddMetadataParse(time.Since(parseStarted))
 		nextByKey[candidate.key] = claudeSessionIndexEntry{
-			Key:         candidate.key,
-			FilePath:    candidate.path,
-			Directory:   candidate.directory,
-			Title:       title,
-			CreatedAt:   createdAt,
-			UpdatedAt:   updatedAt,
-			Fingerprint: candidate.fingerprint,
+			Key:             candidate.key,
+			FilePath:        candidate.path,
+			Directory:       candidate.directory,
+			Title:           scan.Title,
+			ModelID:         scan.ModelID,
+			ProviderID:      scan.ProviderID,
+			ReasoningEffort: scan.ReasoningEffort,
+			CreatedAt:       scan.CreatedAt,
+			UpdatedAt:       scan.UpdatedAt,
+			Fingerprint:     candidate.fingerprint,
 		}
 	}
 	deleted := 0
@@ -232,7 +238,7 @@ func (c *claudeSessionCatalog) buildSnapshot(
 }
 
 func claudeSessionEntryToWire(entry claudeSessionIndexEntry) map[string]interface{} {
-	return map[string]interface{}{
+	wire := map[string]interface{}{
 		"id":              entry.Key.SessionID,
 		"title":           entry.Title,
 		"messageCount":    entry.MessageCount,
@@ -241,4 +247,16 @@ func claudeSessionEntryToWire(entry claudeSessionIndexEntry) map[string]interfac
 		"updatedAtMillis": entry.UpdatedAt.UnixMilli(),
 		"createdAtMillis": entry.CreatedAt.UnixMilli(),
 	}
+	if entry.ModelID != "" {
+		wire["modelId"] = entry.ModelID
+		wire["effectiveModelId"] = entry.ModelID
+	}
+	if entry.ProviderID != "" {
+		wire["providerId"] = entry.ProviderID
+		wire["effectiveProviderId"] = entry.ProviderID
+	}
+	if entry.ReasoningEffort != "" {
+		wire["reasoningEffort"] = entry.ReasoningEffort
+	}
+	return wire
 }

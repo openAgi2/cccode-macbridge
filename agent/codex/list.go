@@ -57,7 +57,9 @@ func (c *sessionListCache) list(ctx context.Context, codexHome string) ([]core.A
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	sessionsDir := filepath.Join(resolveCodexHomeDir(codexHome), "sessions")
+	resolvedCodexHome := resolveCodexHomeDir(codexHome)
+	sessionsDir := filepath.Join(resolvedCodexHome, "sessions")
+	titleIndex := readCodexSessionTitleIndex(resolvedCodexHome)
 	metrics := core.SessionLoadMetricsFromContext(ctx)
 
 	// Phase 1: walk 目录收集所有 .jsonl path + mtime（只 stat，不读文件内容）
@@ -114,7 +116,7 @@ func (c *sessionListCache) list(ctx context.Context, codexHome string) ([]core.A
 	// 完全命中：零开销直接返回
 	if c.files != nil && len(changed) == 0 && deleted == 0 {
 		metrics.RecordStatCompare(time.Since(compareStarted), 0, 0, true)
-		return cloneSessionInfos(c.sorted), nil
+		return applyCodexTitleIndex(cloneSessionInfos(c.sorted), titleIndex), nil
 	}
 	metrics.RecordStatCompare(time.Since(compareStarted), len(changed), deleted, false)
 
@@ -157,7 +159,48 @@ func (c *sessionListCache) list(ctx context.Context, codexHome string) ([]core.A
 	})
 	c.sorted = sessions
 
-	return cloneSessionInfos(c.sorted), nil
+	return applyCodexTitleIndex(cloneSessionInfos(c.sorted), titleIndex), nil
+}
+
+func readCodexSessionTitleIndex(codexHome string) map[string]string {
+	path := filepath.Join(codexHome, "session_index.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	titles := make(map[string]string)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var entry struct {
+			ID         string `json:"id"`
+			ThreadName string `json:"thread_name"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
+			continue
+		}
+		id := strings.TrimSpace(entry.ID)
+		title := strings.TrimSpace(entry.ThreadName)
+		if id == "" || title == "" {
+			continue
+		}
+		titles[id] = title
+	}
+	return titles
+}
+
+func applyCodexTitleIndex(sessions []core.AgentSessionInfo, titleIndex map[string]string) []core.AgentSessionInfo {
+	if len(sessions) == 0 || len(titleIndex) == 0 {
+		return sessions
+	}
+	for idx := range sessions {
+		if title := titleIndex[sessions[idx].ID]; title != "" {
+			sessions[idx].Summary = title
+		}
+	}
+	return sessions
 }
 
 func cloneSessionInfos(sessions []core.AgentSessionInfo) []core.AgentSessionInfo {
@@ -184,6 +227,9 @@ func parseCodexSessionFile(path string) *core.AgentSessionInfo {
 
 	var sessionID string
 	var sessionCwd string
+	var modelID string
+	var providerID string
+	var reasoningEffort string
 	var summary string
 	var msgCount int
 	userMsgSeen := 0
@@ -192,7 +238,7 @@ func parseCodexSessionFile(path string) *core.AgentSessionInfo {
 	scanner.Buffer(make([]byte, 256*1024), codexSessionScannerMaxTokenSize)
 
 	if scanner.Scan() {
-		parseCodexSessionMetadata(scanner.Bytes(), &sessionID, &sessionCwd)
+		parseCodexSessionMetadata(scanner.Bytes(), &sessionID, &sessionCwd, &providerID)
 	}
 
 	if _, err := f.Seek(0, 0); err != nil {
@@ -221,7 +267,10 @@ func parseCodexSessionFile(path string) *core.AgentSessionInfo {
 
 		switch entry.Type {
 		case "session_meta":
-			parseCodexSessionMetadata(scanner.Bytes(), &sessionID, &sessionCwd)
+			parseCodexSessionMetadata(scanner.Bytes(), &sessionID, &sessionCwd, &providerID)
+
+		case "turn_context":
+			parseCodexTurnContext(scanner.Bytes(), &modelID, &reasoningEffort)
 
 		case "response_item":
 			var item struct {
@@ -235,11 +284,8 @@ func parseCodexSessionFile(path string) *core.AgentSessionInfo {
 				if item.Role == "user" {
 					userMsgSeen++
 					msgCount++
-					// The actual user prompt is the last user response_item
-					// (earlier ones are system/AGENTS.md instructions).
-					// Pick the last content block that looks like a real prompt.
 					for _, c := range item.Content {
-						if c.Type == "input_text" && c.Text != "" && isUserPrompt(c.Text) {
+						if summary == "" && c.Type == "input_text" && c.Text != "" && isUserPrompt(c.Text) {
 							summary = c.Text
 						}
 					}
@@ -259,15 +305,18 @@ func parseCodexSessionFile(path string) *core.AgentSessionInfo {
 	}
 
 	return &core.AgentSessionInfo{
-		ID:           sessionID,
-		Summary:      summary,
-		MessageCount: msgCount,
-		ModifiedAt:   stat.ModTime(),
-		Directory:    sessionCwd,
+		ID:              sessionID,
+		Summary:         summary,
+		MessageCount:    msgCount,
+		ModifiedAt:      stat.ModTime(),
+		Directory:       sessionCwd,
+		ModelID:         modelID,
+		ProviderID:      providerID,
+		ReasoningEffort: reasoningEffort,
 	}
 }
 
-func parseCodexSessionMetadata(line []byte, sessionID, sessionCwd *string) {
+func parseCodexSessionMetadata(line []byte, sessionID, sessionCwd, providerID *string) {
 	var entry struct {
 		Type    string          `json:"type"`
 		Payload json.RawMessage `json:"payload"`
@@ -276,14 +325,58 @@ func parseCodexSessionMetadata(line []byte, sessionID, sessionCwd *string) {
 		return
 	}
 	var meta struct {
-		ID  string `json:"id"`
-		Cwd string `json:"cwd"`
+		ID            string `json:"id"`
+		SessionID     string `json:"session_id"`
+		Cwd           string `json:"cwd"`
+		ModelProvider string `json:"model_provider"`
 	}
 	if json.Unmarshal(entry.Payload, &meta) != nil {
 		return
 	}
-	*sessionID = meta.ID
-	*sessionCwd = meta.Cwd
+	if id := strings.TrimSpace(meta.ID); id != "" {
+		*sessionID = id
+	} else if id := strings.TrimSpace(meta.SessionID); id != "" {
+		*sessionID = id
+	}
+	if cwd := strings.TrimSpace(meta.Cwd); cwd != "" {
+		*sessionCwd = cwd
+	}
+	if provider := strings.TrimSpace(meta.ModelProvider); provider != "" {
+		*providerID = provider
+	}
+}
+
+func parseCodexTurnContext(line []byte, modelID, reasoningEffort *string) {
+	var entry struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if json.Unmarshal(line, &entry) != nil || entry.Type != "turn_context" {
+		return
+	}
+	var payload struct {
+		Model             string `json:"model"`
+		ReasoningEffort   string `json:"reasoning_effort"`
+		CollaborationMode struct {
+			Settings struct {
+				Model           string `json:"model"`
+				ReasoningEffort string `json:"reasoning_effort"`
+			} `json:"settings"`
+		} `json:"collaboration_mode"`
+	}
+	if json.Unmarshal(entry.Payload, &payload) != nil {
+		return
+	}
+	if model := strings.TrimSpace(payload.Model); model != "" {
+		*modelID = model
+	} else if model := strings.TrimSpace(payload.CollaborationMode.Settings.Model); model != "" {
+		*modelID = model
+	}
+	if effort := strings.TrimSpace(payload.ReasoningEffort); effort != "" {
+		*reasoningEffort = effort
+	} else if effort := strings.TrimSpace(payload.CollaborationMode.Settings.ReasoningEffort); effort != "" {
+		*reasoningEffort = effort
+	}
 }
 
 // findSessionFile locates the JSONL transcript for a given session ID.

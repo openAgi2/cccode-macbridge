@@ -899,7 +899,6 @@ func (h *Handlers) enrichSessionStateWithAgent(mapped map[string]interface{}, ag
 	return mapped
 }
 
-
 // ── ocProxy: list_sessions ────────────────────────────────────────────────────
 
 func (h *Handlers) ocHandleListSessions(conn Connection, msg WireMessage, dir string) {
@@ -2251,6 +2250,7 @@ func (h *Handlers) detectClaudeTranscriptState(sessPath string) string {
 	}
 	return "unknown"
 }
+
 // 且事件通道没有跨进程共享事件总线，它的 relayEvents goroutine 在完成一轮（EventResult）或空闲时
 // 绝不能退出（通过 continue 忽略）。这也意味着该 goroutine 和底层 session 会常驻在内存中，
 // 其最终生命周期的释放依赖于 session 显式关闭/删除导致 events channel 关闭。这需要注意潜在的泄漏风险。
@@ -2730,18 +2730,21 @@ func (h *Handlers) handleGetSession(conn Connection, msg WireMessage, agent core
 		if sessPath != "" {
 			info, err := os.Stat(sessPath)
 			if err == nil {
-				title, _, updatedAt := scanClaudeSessionSummary(sessPath, info.ModTime())
+				scan := scanClaudeSessionMetadata(sessPath, info.ModTime())
 				projectKey := filepath.Base(projDir)
 				realDir := resolveProjectRealDirectory(projDir)
 				if realDir == "" {
 					realDir = projectKey
 				}
 				sessionInfo := core.AgentSessionInfo{
-					ID:           params.SessionID,
-					Summary:      title,
-					MessageCount: 0,
-					ModifiedAt:   updatedAt,
-					Directory:    realDir,
+					ID:              params.SessionID,
+					Summary:         scan.Title,
+					MessageCount:    0,
+					ModifiedAt:      scan.UpdatedAt,
+					Directory:       realDir,
+					ModelID:         scan.ModelID,
+					ProviderID:      scan.ProviderID,
+					ReasoningEffort: scan.ReasoningEffort,
 				}
 				wireSession := sessionsToWire([]core.AgentSessionInfo{sessionInfo})[0]
 				conn.SendResult(msg.RequestID, map[string]interface{}{"session": h.enrichSessionStateWithAgent(wireSession, agent)}, nil)
@@ -2967,29 +2970,57 @@ func scanSessionsFromProjectDirWithMetrics(projectDir, projectKey string, metric
 		// Claude Code 可能在补写 title / last-prompt 等元数据时触碰旧 JSONL 的 mtime。
 		// session 列表应展示会话内容时间，而不是文件系统更新时间。
 		parseStarted := time.Now()
-		title, createdAt, updatedAt := scanClaudeSessionSummary(filepath.Join(projectDir, name), info.ModTime())
+		scan := scanClaudeSessionMetadata(filepath.Join(projectDir, name), info.ModTime())
 		metrics.AddMetadataParse(time.Since(parseStarted))
-		result = append(result, map[string]interface{}{
+		wire := map[string]interface{}{
 			"id":              sessionID,
-			"title":           title,
+			"title":           scan.Title,
 			"messageCount":    0,
 			"directory":       realDir,
-			"modifiedAt":      updatedAt.Format(time.RFC3339),
-			"updatedAtMillis": updatedAt.UnixMilli(),
-			"createdAtMillis": createdAt.UnixMilli(),
-		})
+			"modifiedAt":      scan.UpdatedAt.Format(time.RFC3339),
+			"updatedAtMillis": scan.UpdatedAt.UnixMilli(),
+			"createdAtMillis": scan.CreatedAt.UnixMilli(),
+		}
+		if scan.ModelID != "" {
+			wire["modelId"] = scan.ModelID
+			wire["effectiveModelId"] = scan.ModelID
+		}
+		if scan.ProviderID != "" {
+			wire["providerId"] = scan.ProviderID
+			wire["effectiveProviderId"] = scan.ProviderID
+		}
+		if scan.ReasoningEffort != "" {
+			wire["reasoningEffort"] = scan.ReasoningEffort
+		}
+		result = append(result, wire)
 	}
 	metrics.RecordEnumeration(enumerateElapsed, fileCount, totalBytes, maxFileBytes)
 	return result
 }
 
+type claudeSessionScanResult struct {
+	Title           string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	ModelID         string
+	ProviderID      string
+	ReasoningEffort string
+}
+
 func scanClaudeSessionSummary(path string, fallbackTime time.Time) (string, time.Time, time.Time) {
+	scan := scanClaudeSessionMetadata(path, fallbackTime)
+	return scan.Title, scan.CreatedAt, scan.UpdatedAt
+}
+
+func scanClaudeSessionMetadata(path string, fallbackTime time.Time) claudeSessionScanResult {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fallbackTime, fallbackTime
+		return claudeSessionScanResult{CreatedAt: fallbackTime, UpdatedAt: fallbackTime}
 	}
 	defer f.Close()
 	var title string
+	var assistantTitle string
+	var modelID string
 	var createdAt time.Time
 	var updatedAt time.Time
 	var reader io.Reader = f
@@ -3019,15 +3050,25 @@ func scanClaudeSessionSummary(path string, fallbackTime time.Time) (string, time
 				}
 			}
 		}
-		if title != "" {
-			continue
-		}
-		// 寻找第一条 assistant 消息的文本作为 title
 		var msgType string
-		if err := json.Unmarshal(raw["type"], &msgType); err != nil || msgType != "assistant" {
+		if err := json.Unmarshal(raw["type"], &msgType); err != nil {
 			continue
 		}
+		if msgType == "custom-title" {
+			var customTitle string
+			if err := json.Unmarshal(raw["customTitle"], &customTitle); err == nil {
+				if trimmed := strings.TrimSpace(customTitle); trimmed != "" {
+					title = trimmed
+				}
+			}
+			continue
+		}
+		if assistantTitle != "" || msgType != "assistant" {
+			continue
+		}
+		// Claude Code 没有生成 custom-title 时，退回第一条 assistant 文本。
 		var msg struct {
+			Model   string `json:"model"`
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -3035,6 +3076,9 @@ func scanClaudeSessionSummary(path string, fallbackTime time.Time) (string, time
 		}
 		if err := json.Unmarshal(raw["message"], &msg); err != nil {
 			continue
+		}
+		if model := strings.TrimSpace(msg.Model); model != "" && modelID == "" {
+			modelID = model
 		}
 		for _, c := range msg.Content {
 			if c.Type == "text" && c.Text != "" {
@@ -3044,10 +3088,13 @@ func scanClaudeSessionSummary(path string, fallbackTime time.Time) (string, time
 				if len(candidate) > 80 {
 					candidate = candidate[:80] + "..."
 				}
-				title = strings.TrimSpace(candidate)
+				assistantTitle = strings.TrimSpace(candidate)
 				break
 			}
 		}
+	}
+	if title == "" {
+		title = assistantTitle
 	}
 	if createdAt.IsZero() {
 		createdAt = fallbackTime
@@ -3055,7 +3102,17 @@ func scanClaudeSessionSummary(path string, fallbackTime time.Time) (string, time
 	if updatedAt.IsZero() {
 		updatedAt = createdAt
 	}
-	return title, createdAt, updatedAt
+	providerID := ""
+	if modelID != "" {
+		_, _, providerID = parseModelID(modelID)
+	}
+	return claudeSessionScanResult{
+		Title:      title,
+		CreatedAt:  createdAt,
+		UpdatedAt:  updatedAt,
+		ModelID:    modelID,
+		ProviderID: providerID,
+	}
 }
 
 func (h *Handlers) handleGetSessionMessages(conn Connection, msg WireMessage, agent core.Agent) {
@@ -3537,6 +3594,17 @@ func sessionsToWire(sessions []core.AgentSessionInfo) []map[string]interface{} {
 		}
 		if s.Directory != "" {
 			wire["directory"] = s.Directory
+		}
+		if s.ModelID != "" {
+			wire["modelId"] = s.ModelID
+			wire["effectiveModelId"] = s.ModelID
+		}
+		if s.ProviderID != "" {
+			wire["providerId"] = s.ProviderID
+			wire["effectiveProviderId"] = s.ProviderID
+		}
+		if s.ReasoningEffort != "" {
+			wire["reasoningEffort"] = s.ReasoningEffort
 		}
 		if !s.ArchivedAt.IsZero() {
 			wire["archivedAtMillis"] = s.ArchivedAt.UnixMilli()

@@ -21,9 +21,9 @@ func TestClaudeSessionCatalogIncrementalRefreshAndDeletion(t *testing.T) {
 
 	catalog := newClaudeSessionCatalog(projectsDir)
 	var parseCalls atomic.Int32
-	catalog.parseSummary = func(path string, fallback time.Time) (string, time.Time, time.Time) {
+	catalog.parseSession = func(path string, fallback time.Time) claudeSessionScanResult {
 		parseCalls.Add(1)
-		return scanClaudeSessionSummary(path, fallback)
+		return scanClaudeSessionMetadata(path, fallback)
 	}
 
 	firstMetrics := &core.SessionLoadMetrics{}
@@ -107,6 +107,56 @@ func TestClaudeSessionCatalogKeepsProjectIdentityAndFiltersSnapshot(t *testing.T
 	}
 }
 
+func TestClaudeSessionCatalogUsesCustomTitle(t *testing.T) {
+	projectsDir := t.TempDir()
+	projectDir := filepath.Join(projectsDir, "-tmp-project")
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(projectDir, "session-1.jsonl")
+	content := `{"type":"user","timestamp":"2026-06-01T10:00:00Z","cwd":"/tmp/project","message":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-06-01T10:01:00Z","cwd":"/tmp/project","message":{"role":"assistant","content":[{"type":"text","text":"assistant fallback"}]}}` + "\n" +
+		`{"type":"custom-title","customTitle":"Claude Desktop title","sessionId":"session-1"}` + "\n"
+	if err := os.WriteFile(sessionPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := newClaudeSessionCatalog(projectsDir)
+	got := catalog.list("", &core.SessionLoadMetrics{})
+	if len(got) != 1 {
+		t.Fatalf("catalog sessions = %#v", got)
+	}
+	if got[0]["title"] != "Claude Desktop title" {
+		t.Fatalf("title = %#v", got[0]["title"])
+	}
+}
+
+func TestClaudeSessionCatalogUsesAssistantModel(t *testing.T) {
+	projectsDir := t.TempDir()
+	projectDir := filepath.Join(projectsDir, "-tmp-project")
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(projectDir, "session-1.jsonl")
+	content := `{"type":"user","timestamp":"2026-06-01T10:00:00Z","cwd":"/tmp/project","message":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-06-01T10:01:00Z","cwd":"/tmp/project","message":{"role":"assistant","model":"anthropic/claude-sonnet-4","content":[{"type":"text","text":"assistant fallback"}]}}` + "\n"
+	if err := os.WriteFile(sessionPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := newClaudeSessionCatalog(projectsDir)
+	got := catalog.list("", &core.SessionLoadMetrics{})
+	if len(got) != 1 {
+		t.Fatalf("catalog sessions = %#v", got)
+	}
+	if got[0]["modelId"] != "anthropic/claude-sonnet-4" {
+		t.Fatalf("modelId = %#v", got[0]["modelId"])
+	}
+	if got[0]["effectiveProviderId"] != "anthropic" {
+		t.Fatalf("effectiveProviderId = %#v", got[0]["effectiveProviderId"])
+	}
+}
+
 func TestClaudeSessionCatalogReadersReuseSnapshotDuringRefresh(t *testing.T) {
 	projectsDir := t.TempDir()
 	projectDir := filepath.Join(projectsDir, "-tmp-project")
@@ -124,10 +174,10 @@ func TestClaudeSessionCatalogReadersReuseSnapshotDuringRefresh(t *testing.T) {
 
 	parseStarted := make(chan struct{})
 	releaseParse := make(chan struct{})
-	catalog.parseSummary = func(path string, fallback time.Time) (string, time.Time, time.Time) {
+	catalog.parseSession = func(path string, fallback time.Time) claudeSessionScanResult {
 		close(parseStarted)
 		<-releaseParse
-		return scanClaudeSessionSummary(path, fallback)
+		return scanClaudeSessionMetadata(path, fallback)
 	}
 	refreshDone := make(chan struct{})
 	go func() {

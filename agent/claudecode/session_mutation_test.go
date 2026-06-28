@@ -55,6 +55,34 @@ func TestRenameSession_AppendsCustomTitleAndUpdatesListSessions(t *testing.T) {
 	}
 }
 
+func TestListSessionsUsesFirstUserPromptAsDefaultTitle(t *testing.T) {
+	homeDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workDir): %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+
+	writeClaudeTranscriptFixture(t, homeDir, workDir, "ses-title", []string{
+		`{"type":"user","timestamp":"2026-05-03T10:00:00Z","message":{"id":"user-1","role":"user","content":"第一个问题"}}`,
+		`{"type":"assistant","timestamp":"2026-05-03T10:00:01Z","message":{"id":"assistant-1","role":"assistant","content":[{"type":"text","text":"收到"}]}}`,
+		`{"type":"user","timestamp":"2026-05-03T10:00:02Z","message":{"id":"user-2","role":"user","content":"第二个问题"}}`,
+	})
+
+	agent := &Agent{workDir: workDir}
+	sessions, err := agent.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("session count = %d, want 1", len(sessions))
+	}
+	if sessions[0].Summary != "第一个问题" {
+		t.Fatalf("ListSessions summary = %q, want 第一个问题", sessions[0].Summary)
+	}
+}
+
 func TestArchiveSession_WritesSidecarAndMarksListSessions(t *testing.T) {
 	homeDir := t.TempDir()
 	workDir := filepath.Join(t.TempDir(), "project")

@@ -115,6 +115,127 @@ func TestSessionListCacheUsesSessionIDAsTimestampTieBreaker(t *testing.T) {
 	}
 }
 
+func TestSessionListCacheUsesFirstUserPromptAsSummary(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+
+	sessionID := "multi-turn-session"
+	sessionPath := filepath.Join(sessionsDir, "rollout-"+sessionID+".jsonl")
+	content := strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"` + sessionID + `","cwd":"/tmp/project"}}`,
+		`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"first real prompt"}]}}`,
+		`{"type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"ok"}]}}`,
+		`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"second real prompt"}]}}`,
+	}, "\n")
+	if err := os.WriteFile(sessionPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	var cache sessionListCache
+	sessions, err := cache.list(context.Background(), codexHome)
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions length = %d, want 1", len(sessions))
+	}
+	if sessions[0].Summary != "first real prompt" {
+		t.Fatalf("summary = %q, want first real prompt", sessions[0].Summary)
+	}
+}
+
+func TestSessionListCacheRestoresModelAndReasoningEffort(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+
+	sessionID := "runtime-metadata-session"
+	sessionPath := filepath.Join(sessionsDir, "rollout-"+sessionID+".jsonl")
+	content := strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"` + sessionID + `","cwd":"/tmp/project","model_provider":"openai"}}`,
+		`{"type":"turn_context","payload":{"model":"gpt-5.5","collaboration_mode":{"settings":{"reasoning_effort":"medium"}}}}`,
+		`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"prompt"}]}}`,
+	}, "\n")
+	if err := os.WriteFile(sessionPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	var cache sessionListCache
+	sessions, err := cache.list(context.Background(), codexHome)
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions length = %d, want 1", len(sessions))
+	}
+	if sessions[0].ModelID != "gpt-5.5" {
+		t.Fatalf("ModelID = %q, want gpt-5.5", sessions[0].ModelID)
+	}
+	if sessions[0].ProviderID != "openai" {
+		t.Fatalf("ProviderID = %q, want openai", sessions[0].ProviderID)
+	}
+	if sessions[0].ReasoningEffort != "medium" {
+		t.Fatalf("ReasoningEffort = %q, want medium", sessions[0].ReasoningEffort)
+	}
+}
+
+func TestSessionListCacheUsesCodexThreadNameAsSummary(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+
+	sessionID := "indexed-session"
+	sessionPath := filepath.Join(sessionsDir, "rollout-"+sessionID+".jsonl")
+	content := strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"` + sessionID + `","cwd":"/tmp/project"}}`,
+		`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"raw first prompt"}]}}`,
+	}, "\n")
+	if err := os.WriteFile(sessionPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(codexHome, "session_index.jsonl"),
+		[]byte(`{"id":"`+sessionID+`","thread_name":"Codex Desktop title","updated_at":"2026-06-28T08:42:45Z"}`+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write session index: %v", err)
+	}
+
+	var cache sessionListCache
+	sessions, err := cache.list(context.Background(), codexHome)
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions length = %d, want 1", len(sessions))
+	}
+	if sessions[0].Summary != "Codex Desktop title" {
+		t.Fatalf("summary = %q, want Codex Desktop title", sessions[0].Summary)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(codexHome, "session_index.jsonl"),
+		[]byte(`{"id":"`+sessionID+`","thread_name":"Updated Desktop title","updated_at":"2026-06-28T08:45:00Z"}`+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("update session index: %v", err)
+	}
+	sessions, err = cache.list(context.Background(), codexHome)
+	if err != nil {
+		t.Fatalf("list after index update failed: %v", err)
+	}
+	if sessions[0].Summary != "Updated Desktop title" {
+		t.Fatalf("summary after index update = %q, want Updated Desktop title", sessions[0].Summary)
+	}
+}
+
 func TestSessionListCacheReadsLargeRolloutFromBoundedPrefix(t *testing.T) {
 	codexHome := filepath.Join(t.TempDir(), ".codex")
 	sessionsDir := filepath.Join(codexHome, "sessions")
