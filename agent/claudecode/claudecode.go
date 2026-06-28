@@ -948,6 +948,7 @@ func LoadClaudeRichHistoryFromReader(r io.Reader, path string) ([]core.RichHisto
 	assistantByMessageID := make(map[string]*richHistoryMessageBuilder)
 	toolOwners := make(map[string]*richHistoryMessageBuilder)
 	pendingToolResults := make(map[string]transcriptToolResult)
+	skipNextSkillInstruction := false
 
 	lineNo := 0
 	for scanner.Scan() {
@@ -970,6 +971,7 @@ func LoadClaudeRichHistoryFromReader(r io.Reader, path string) ([]core.RichHisto
 
 		switch raw.Type {
 		case "assistant":
+			skipNextSkillInstruction = false
 			messageID := strings.TrimSpace(raw.Message.ID)
 			if messageID == "" {
 				messageID = fmt.Sprintf("assistant-line-%d", lineNo)
@@ -1024,12 +1026,20 @@ func LoadClaudeRichHistoryFromReader(r io.Reader, path string) ([]core.RichHisto
 						Output:  normalizeToolResultOutput(block.Content),
 						IsError: block.IsError,
 					}
+					if isClaudeSkillLaunchOutput(result.Output) {
+						skipNextSkillInstruction = true
+					}
 					if owner, ok := toolOwners[block.ToolUseID]; ok {
 						owner.applyToolResult(block.ToolUseID, result)
 					} else {
 						pendingToolResults[block.ToolUseID] = result
 					}
 				case "text":
+					if skipNextSkillInstruction && isClaudeSkillInstructionText(block.Text) {
+						skipNextSkillInstruction = false
+						continue
+					}
+					skipNextSkillInstruction = false
 					hasVisibleContent = true
 					builder.addText(block.Text)
 				case "":
@@ -1054,6 +1064,29 @@ func LoadClaudeRichHistoryFromReader(r io.Reader, path string) ([]core.RichHisto
 		entries = append(entries, builder.build())
 	}
 	return entries, nil
+}
+
+func isClaudeSkillLaunchOutput(output any) bool {
+	text := strings.TrimSpace(inlineToolOutputText(output))
+	return strings.HasPrefix(text, "Launching skill:")
+}
+
+func inlineToolOutputText(output any) string {
+	switch value := output.(type) {
+	case string:
+		return value
+	case map[string]any:
+		text, _ := value["text"].(string)
+		return text
+	default:
+		return ""
+	}
+}
+
+func isClaudeSkillInstructionText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.HasPrefix(trimmed, "Base directory for this skill:") &&
+		strings.Contains(trimmed, "\n# ")
 }
 
 // GetSessionHistory reads the Claude Code JSONL transcript and returns user/assistant messages.

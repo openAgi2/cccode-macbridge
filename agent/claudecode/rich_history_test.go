@@ -163,6 +163,45 @@ func TestGetRichSessionHistory_GracefullyHandlesUnknownBlocksMissingResultsAndBr
 	}
 }
 
+func TestGetRichSessionHistory_HidesSkillInstructionInjection(t *testing.T) {
+	homeDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workDir): %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+
+	writeClaudeTranscriptFixture(t, homeDir, workDir, "ses-skill", []string{
+		`{"type":"user","timestamp":"2026-05-01T12:00:00Z","message":{"id":"user-1","role":"user","content":"用 exec-plan skill 执行"}}`,
+		`{"type":"assistant","timestamp":"2026-05-01T12:00:01Z","message":{"id":"assistant-1","role":"assistant","model":"glm-5.2","content":[{"type":"tool_use","id":"tool-skill","name":"Skill","input":{"name":"exec-plan"}}]}}`,
+		`{"type":"user","timestamp":"2026-05-01T12:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-skill","content":"Launching skill: exec-plan"}]}}`,
+		`{"type":"user","timestamp":"2026-05-01T12:00:03Z","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /Users/jacklee/.claude/skills/exec-plan\n\n# Execution Plan Manager\n\nTurn a plan document into a durable execution queue."}]}}`,
+		`{"type":"assistant","timestamp":"2026-05-01T12:00:04Z","message":{"id":"assistant-2","role":"assistant","model":"glm-5.2","content":[{"type":"text","text":"已加载 skill，开始执行。"}]}}`,
+	})
+
+	agent := &Agent{workDir: workDir}
+	entries, err := agent.GetRichSessionHistory(context.Background(), "ses-skill", 0)
+	if err != nil {
+		t.Fatalf("GetRichSessionHistory() error = %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("entry count = %d, want 3: %#v", len(entries), entries)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Content, "Base directory for this skill:") ||
+			strings.Contains(entry.Content, "# Execution Plan Manager") {
+			t.Fatalf("skill instruction injection leaked into visible history: %#v", entry)
+		}
+	}
+	if entries[1].Role != "assistant" || len(entries[1].Steps) != 1 {
+		t.Fatalf("skill tool use should remain as assistant step, got %#v", entries[1])
+	}
+	if entries[2].Content != "已加载 skill，开始执行。" {
+		t.Fatalf("final assistant content = %q", entries[2].Content)
+	}
+}
+
 func writeClaudeTranscriptFixture(t *testing.T, homeDir, workDir, sessionID string, lines []string) string {
 	t.Helper()
 	absWorkDir, err := filepath.Abs(workDir)
