@@ -438,8 +438,8 @@ type UnifiedModel = {
   providerId: string
   reasoning?: boolean
   limit?: { context: number, output: number }
-  supportedReasoningEfforts?: ('minimal'|'low'|'medium'|'high'|'xhigh')[]
-  defaultReasoningEffort?: 'minimal'|'low'|'medium'|'high'|'xhigh'
+  supportedReasoningEfforts?: ('minimal'|'low'|'medium'|'high'|'xhigh'|'max'|'ultra')[]
+  defaultReasoningEffort?: 'minimal'|'low'|'medium'|'high'|'xhigh'|'max'|'ultra'
   isDefault?: boolean
 }
 ```

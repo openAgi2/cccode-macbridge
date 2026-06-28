@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### 2026-06-28 — Claude Code session 同步模型与智能等级
+
+- Claude Code 历史 session 列表和单 session 查询现在会把 MacBridge 当前 Claude runtime 的 reasoning effort 补入缺少 effort 元数据的旧 transcript，iOS 打开这些 session 时可显示与 Mac 端一致的模型和智能等级（如 `glm-5.2` + `Ultra`）。
+- Claude Code effort 枚举补齐 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`，并兼容旧的 `ultracode` 输入为 `ultra`。
+
 ### 2026-06-22 — 修复外部进程会话状态同步缺陷 (运行态同步)
 
 - **修复被动订阅事件流下的会话运行状态更新缺失**：在 `go-bridge` 的 `startPassiveSubscription` 事件监听中，当监听到外部 Agent 独立进程产生的 `turn_started`、`turn_completed`、`session_state_changed`、`session_status_changed` 等代表运行态变化的事件时，实时将状态同步更新到 `h.sessions` 缓存中，并增强 `sessionRegistry` 中的状态标记，允许外部独立进程在缓存尚未注册时自动补齐临时状态。由此解决 iOS 客户端连接并切换到新开运行中会话时，由于 go-bridge 返回的 runtimeState 为空而导致 iOS 侧输入框保持简易模式且思考不展开的问题。

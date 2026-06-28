@@ -52,6 +52,7 @@ type Handlers struct {
 	bridgeID                string
 	relayHelloHandler       func(conn Connection, msg *WireMessage)
 	claudeSessions          *claudeSessionCatalog
+	pendingClaudeRuntime    map[string]claudeRuntimeSelection
 	transcriptIndex         *transcriptindex.Store
 	// capabilityPolicy 是集中式 RPC 授权层（P3 架构演进，§3.2/§8）。
 	capabilityPolicy *CapabilityPolicy
@@ -103,6 +104,7 @@ func newHandlersWithContext(ctx context.Context) *Handlers {
 		presentation:           presentation,
 		relayEventRouter:       NewRelayEventRouter(observation, outbox, prekeys, NewMailboxService(NewRelayHub()), presentation),
 		claudeSessions:         newDefaultClaudeSessionCatalog(),
+		pendingClaudeRuntime:   make(map[string]claudeRuntimeSelection),
 		transcriptIndex:        transcriptindex.NewStore(defaultTranscriptIndexDir()),
 		capabilityPolicy:       NewCapabilityPolicy(),
 		relayEnabled:           true,
@@ -846,6 +848,13 @@ func (h *Handlers) enrichSessionStateWithAgent(mapped map[string]interface{}, ag
 		// 若 session 不在结果中（进程已退出、session 文件已清理），回退到直接读取
 		// transcript 文件判定。这修复了进程退出后 registry 旧 "running" 状态泄漏的问题。
 		if agent != nil && agent.Name() == "claudecode" {
+			if effort, _ := mapped["reasoningEffort"].(string); strings.TrimSpace(effort) == "" {
+				if re, ok := agent.(core.ReasoningEffortSwitcher); ok {
+					if effort := normalizeClaudeRuntimeEffort(re.GetReasoningEffort()); effort != "" {
+						mapped["reasoningEffort"] = effort
+					}
+				}
+			}
 			usedTranscriptFallback := false
 			if lister, ok := agent.(core.RunningSessionLister); ok {
 				runningMap, err := lister.GetRunningSessionIDs(context.TODO())
@@ -911,6 +920,7 @@ func (h *Handlers) ocHandleListSessions(conn Connection, msg WireMessage, dir st
 	}
 
 	var result []map[string]interface{}
+	agent, _ := h.getAgent(msg.BackendID)
 	for _, s := range sessions {
 		parentID, _ := s["parentId"].(string)
 		if parentID == "" {
@@ -919,7 +929,7 @@ func (h *Handlers) ocHandleListSessions(conn Connection, msg WireMessage, dir st
 		if rootsOnly && parentID != "" {
 			continue
 		}
-		result = append(result, h.enrichSessionState(mapSession(s)))
+		result = append(result, h.enrichSessionStateWithAgent(mapSession(s), agent))
 	}
 	conn.SendResult(msg.RequestID, map[string]interface{}{"sessions": result}, nil)
 }
@@ -938,7 +948,8 @@ func (h *Handlers) ocHandleGetSession(conn Connection, msg WireMessage, dir stri
 		conn.SendResult(msg.RequestID, nil, &WireError{Code: "get_failed", Message: err.Error()})
 		return
 	}
-	conn.SendResult(msg.RequestID, map[string]interface{}{"session": h.enrichSessionState(mapSession(s))}, nil)
+	agent, _ := h.getAgent(msg.BackendID)
+	conn.SendResult(msg.RequestID, map[string]interface{}{"session": h.enrichSessionStateWithAgent(mapSession(s), agent)}, nil)
 }
 
 // ── ocProxy: get_session_messages ─────────────────────────────────────────────
@@ -1715,7 +1726,7 @@ func (h *Handlers) handleCreateSession(conn Connection, msg WireMessage, agent c
 		switchDir(agent, params.Directory)
 	}
 
-	if agent.Name() == "codex" {
+	if agent.Name() == "codex" || agent.Name() == "claudecode" {
 		sessionID := fmt.Sprintf("pending-%s", generateShortID())
 		result := map[string]interface{}{
 			"id":    sessionID,
@@ -1785,6 +1796,7 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 		switchDir(agent, params.Directory)
 	}
 	applySendMessageRuntimeOptions(agent, params)
+	claudeRuntime := claudeRuntimeSelectionFromAgent(agent, params)
 
 	// P1-5: 默认日志不记录用户消息正文，仅记录长度，避免 prompt/源码/凭据进入日志、崩溃包或诊断。
 	slog.Info("go-bridge: handleSendMessage", "sessionID", params.SessionID, "contentLen", len(params.Content))
@@ -1822,6 +1834,9 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 			sess = existing
 		} else {
 			h.putSessionWithMeta(params.SessionID, msg.BackendID, extractDir(msg), sess)
+			if agent.Name() == "claudecode" && strings.HasPrefix(params.SessionID, "pending-") {
+				h.pendingClaudeRuntime[params.SessionID] = claudeRuntime
+			}
 			h.mu.Unlock()
 		}
 	} else {
@@ -1843,6 +1858,9 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 		},
 	})
 	h.sessions.markRunning(params.SessionID)
+	if agent.Name() == "claudecode" && !strings.HasPrefix(params.SessionID, "pending-") {
+		h.writeClaudeRuntimeSidecar(params.SessionID, extractDir(msg), claudeRuntime)
+	}
 
 	// 订阅该 session 的事件
 	dir := extractDir(msg)
@@ -1878,7 +1896,7 @@ func selectedModelParam(agent core.Agent, model map[string]interface{}) string {
 	if model == nil {
 		return ""
 	}
-	if agent.Name() == "codex" {
+	if agent.Name() == "codex" || agent.Name() == "claudecode" {
 		if id, _ := model["id"].(string); id != "" {
 			return id
 		}
@@ -1888,6 +1906,55 @@ func selectedModelParam(agent core.Agent, model map[string]interface{}) string {
 		return ""
 	}
 	return normalizeModelParam(model)
+}
+
+type claudeRuntimeSelection struct {
+	ModelID         string
+	ProviderID      string
+	ReasoningEffort string
+}
+
+func claudeRuntimeSelectionFromAgent(agent core.Agent, params SendMessageParams) claudeRuntimeSelection {
+	if agent.Name() != "claudecode" {
+		return claudeRuntimeSelection{}
+	}
+	modelID := selectedModelParam(agent, params.Model)
+	if modelID == "" {
+		if ms, ok := agent.(core.ModelSwitcher); ok {
+			modelID = strings.TrimSpace(ms.GetModel())
+		}
+	}
+	_, _, providerID := modelProviderForAgent(agent, modelID)
+	effort := strings.TrimSpace(params.ReasoningEffort)
+	if effort == "" {
+		if re, ok := agent.(core.ReasoningEffortSwitcher); ok {
+			effort = strings.TrimSpace(re.GetReasoningEffort())
+		}
+	}
+	return claudeRuntimeSelection{
+		ModelID:         strings.TrimSpace(modelID),
+		ProviderID:      strings.TrimSpace(providerID),
+		ReasoningEffort: normalizeClaudeRuntimeEffort(effort),
+	}
+}
+
+func normalizeClaudeRuntimeEffort(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	case "xhigh", "extra-high", "extra_high", "extra high":
+		return "xhigh"
+	case "max":
+		return "max"
+	case "ultra", "ultra-code", "ultra_code", "ultracode":
+		return "ultra"
+	default:
+		return ""
+	}
 }
 
 // drainHistoryEvents 排空 claude --resume 重放的历史事件。
@@ -2499,6 +2566,13 @@ func (h *Handlers) rebindSessionIDIfResolved(currentID string, sess core.AgentSe
 
 	h.sessions.rebind(currentID, realID)
 	h.broadcaster.Rebind(currentID, realID, backendID, directory)
+	if backendID == "claude" || backendID == "claudecode" {
+		h.mu.Lock()
+		selection := h.pendingClaudeRuntime[currentID]
+		delete(h.pendingClaudeRuntime, currentID)
+		h.mu.Unlock()
+		h.writeClaudeRuntimeSidecar(realID, directory, selection)
+	}
 	return realID
 }
 
@@ -3007,6 +3081,13 @@ type claudeSessionScanResult struct {
 	ReasoningEffort string
 }
 
+type claudeBridgeSessionSidecar struct {
+	ArchivedAtMillis int64  `json:"archivedAtMillis,omitempty"`
+	ModelID          string `json:"modelId,omitempty"`
+	ProviderID       string `json:"providerId,omitempty"`
+	ReasoningEffort  string `json:"reasoningEffort,omitempty"`
+}
+
 func scanClaudeSessionSummary(path string, fallbackTime time.Time) (string, time.Time, time.Time) {
 	scan := scanClaudeSessionMetadata(path, fallbackTime)
 	return scan.Title, scan.CreatedAt, scan.UpdatedAt
@@ -3018,6 +3099,7 @@ func scanClaudeSessionMetadata(path string, fallbackTime time.Time) claudeSessio
 		return claudeSessionScanResult{CreatedAt: fallbackTime, UpdatedAt: fallbackTime}
 	}
 	defer f.Close()
+	sidecar := readClaudeBridgeSessionSidecar(filepath.Dir(path), strings.TrimSuffix(filepath.Base(path), ".jsonl"))
 	var title string
 	var assistantTitle string
 	var modelID string
@@ -3063,7 +3145,7 @@ func scanClaudeSessionMetadata(path string, fallbackTime time.Time) claudeSessio
 			}
 			continue
 		}
-		if assistantTitle != "" || msgType != "assistant" {
+		if msgType != "assistant" {
 			continue
 		}
 		// Claude Code 没有生成 custom-title 时，退回第一条 assistant 文本。
@@ -3079,6 +3161,9 @@ func scanClaudeSessionMetadata(path string, fallbackTime time.Time) claudeSessio
 		}
 		if model := strings.TrimSpace(msg.Model); model != "" && modelID == "" {
 			modelID = model
+		}
+		if assistantTitle != "" {
+			continue
 		}
 		for _, c := range msg.Content {
 			if c.Type == "text" && c.Text != "" {
@@ -3103,15 +3188,85 @@ func scanClaudeSessionMetadata(path string, fallbackTime time.Time) claudeSessio
 		updatedAt = createdAt
 	}
 	providerID := ""
+	if sidecar.ModelID != "" {
+		modelID = sidecar.ModelID
+	}
+	if sidecar.ProviderID != "" {
+		providerID = sidecar.ProviderID
+	}
 	if modelID != "" {
-		_, _, providerID = parseModelID(modelID)
+		if providerID == "" {
+			_, _, providerID = parseModelID(modelID)
+		}
 	}
 	return claudeSessionScanResult{
-		Title:      title,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
-		ModelID:    modelID,
-		ProviderID: providerID,
+		Title:           title,
+		CreatedAt:       createdAt,
+		UpdatedAt:       updatedAt,
+		ModelID:         modelID,
+		ProviderID:      providerID,
+		ReasoningEffort: normalizeClaudeRuntimeEffort(sidecar.ReasoningEffort),
+	}
+}
+
+func claudeBridgeSessionSidecarPath(projectDir, sessionID string) string {
+	return filepath.Join(projectDir, ".cc-connect-session-meta", sessionID+".json")
+}
+
+func readClaudeBridgeSessionSidecar(projectDir, sessionID string) claudeBridgeSessionSidecar {
+	data, err := os.ReadFile(claudeBridgeSessionSidecarPath(projectDir, sessionID))
+	if err != nil {
+		return claudeBridgeSessionSidecar{}
+	}
+	var sidecar claudeBridgeSessionSidecar
+	if err := json.Unmarshal(data, &sidecar); err != nil {
+		return claudeBridgeSessionSidecar{}
+	}
+	sidecar.ModelID = strings.TrimSpace(sidecar.ModelID)
+	sidecar.ProviderID = strings.TrimSpace(sidecar.ProviderID)
+	sidecar.ReasoningEffort = normalizeClaudeRuntimeEffort(sidecar.ReasoningEffort)
+	return sidecar
+}
+
+func (h *Handlers) writeClaudeRuntimeSidecar(sessionID, directory string, selection claudeRuntimeSelection) {
+	if selection.ModelID == "" && selection.ProviderID == "" && selection.ReasoningEffort == "" {
+		return
+	}
+	projectDir, _ := findClaudeSessionFile(sessionID, directory)
+	if projectDir == "" && strings.TrimSpace(directory) != "" {
+		_, projectDir = resolveProjectDir(directory)
+	}
+	if projectDir == "" {
+		return
+	}
+	sidecar := readClaudeBridgeSessionSidecar(projectDir, sessionID)
+	if selection.ModelID != "" {
+		sidecar.ModelID = selection.ModelID
+	}
+	if selection.ProviderID != "" {
+		sidecar.ProviderID = selection.ProviderID
+	}
+	if selection.ReasoningEffort != "" {
+		sidecar.ReasoningEffort = selection.ReasoningEffort
+	}
+	dir := filepath.Dir(claudeBridgeSessionSidecarPath(projectDir, sessionID))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("go-bridge: create claude session sidecar dir failed", "sessionID", sessionID, "error", err)
+		return
+	}
+	path := claudeBridgeSessionSidecarPath(projectDir, sessionID)
+	data, err := json.Marshal(sidecar)
+	if err != nil {
+		slog.Warn("go-bridge: marshal claude session sidecar failed", "sessionID", sessionID, "error", err)
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		slog.Warn("go-bridge: write claude session sidecar failed", "sessionID", sessionID, "error", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		slog.Warn("go-bridge: replace claude session sidecar failed", "sessionID", sessionID, "error", err)
 	}
 }
 

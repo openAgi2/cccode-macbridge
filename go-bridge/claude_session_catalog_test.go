@@ -157,6 +157,47 @@ func TestClaudeSessionCatalogUsesAssistantModel(t *testing.T) {
 	}
 }
 
+func TestClaudeSessionCatalogUsesSidecarModelAndEffort(t *testing.T) {
+	projectsDir := t.TempDir()
+	projectDir := filepath.Join(projectsDir, "-tmp-project")
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(projectDir, "session-1.jsonl")
+	content := `{"type":"user","timestamp":"2026-06-01T10:00:00Z","cwd":"/tmp/project","message":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-06-01T10:01:00Z","cwd":"/tmp/project","message":{"role":"assistant","model":"old-model","content":[{"type":"thinking","thinking":"thinking first"}]}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-06-01T10:02:00Z","cwd":"/tmp/project","message":{"role":"assistant","model":"old-model","content":[{"type":"text","text":"assistant fallback"}]}}` + "\n"
+	if err := os.WriteFile(sessionPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metaDir := filepath.Join(projectDir, ".cc-connect-session-meta")
+	if err := os.Mkdir(metaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sidecar := `{"modelId":"glm-5.2","providerId":"default","reasoningEffort":"ultra"}` + "\n"
+	if err := os.WriteFile(filepath.Join(metaDir, "session-1.json"), []byte(sidecar), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := newClaudeSessionCatalog(projectsDir)
+	got := catalog.list("", &core.SessionLoadMetrics{})
+	if len(got) != 1 {
+		t.Fatalf("catalog sessions = %#v", got)
+	}
+	if got[0]["modelId"] != "glm-5.2" {
+		t.Fatalf("modelId = %#v", got[0]["modelId"])
+	}
+	if got[0]["effectiveProviderId"] != "default" {
+		t.Fatalf("effectiveProviderId = %#v", got[0]["effectiveProviderId"])
+	}
+	if got[0]["reasoningEffort"] != "ultra" {
+		t.Fatalf("reasoningEffort = %#v", got[0]["reasoningEffort"])
+	}
+	if got[0]["title"] != "assistant fallback" {
+		t.Fatalf("title = %#v", got[0]["title"])
+	}
+}
+
 func TestClaudeSessionCatalogReadersReuseSnapshotDuringRefresh(t *testing.T) {
 	projectsDir := t.TempDir()
 	projectDir := filepath.Join(projectsDir, "-tmp-project")

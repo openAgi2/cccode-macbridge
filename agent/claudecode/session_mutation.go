@@ -16,13 +16,19 @@ import (
 const claudeSessionMetaDirName = ".cc-connect-session-meta"
 
 type claudeSessionMetadata struct {
-	Title        string
-	MessageCount int
-	ArchivedAt   time.Time
+	Title           string
+	MessageCount    int
+	ArchivedAt      time.Time
+	ModelID         string
+	ProviderID      string
+	ReasoningEffort string
 }
 
 type claudeSessionSidecar struct {
-	ArchivedAtMillis int64 `json:"archivedAtMillis,omitempty"`
+	ArchivedAtMillis int64  `json:"archivedAtMillis,omitempty"`
+	ModelID          string `json:"modelId,omitempty"`
+	ProviderID       string `json:"providerId,omitempty"`
+	ReasoningEffort  string `json:"reasoningEffort,omitempty"`
 }
 
 func (a *Agent) RenameSession(ctx context.Context, sessionID, title string) (*core.AgentSessionInfo, error) {
@@ -76,9 +82,12 @@ func (a *Agent) ArchiveSession(ctx context.Context, sessionID string, archivedAt
 	if err != nil {
 		return nil, err
 	}
-	if err := writeClaudeSessionSidecar(projectDir, sessionID, claudeSessionSidecar{
-		ArchivedAtMillis: archivedAt.UTC().UnixMilli(),
-	}); err != nil {
+	sidecar, err := readClaudeSessionSidecar(projectDir, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	sidecar.ArchivedAtMillis = archivedAt.UTC().UnixMilli()
+	if err := writeClaudeSessionSidecar(projectDir, sessionID, sidecar); err != nil {
 		return nil, err
 	}
 
@@ -139,11 +148,14 @@ func (a *Agent) buildClaudeSessionInfo(projectDir, sessionID, sessionPath string
 		modifiedAt = meta.ArchivedAt
 	}
 	return core.AgentSessionInfo{
-		ID:           sessionID,
-		Summary:      meta.Title,
-		MessageCount: meta.MessageCount,
-		ModifiedAt:   modifiedAt,
-		ArchivedAt:   meta.ArchivedAt,
+		ID:              sessionID,
+		Summary:         meta.Title,
+		MessageCount:    meta.MessageCount,
+		ModifiedAt:      modifiedAt,
+		ArchivedAt:      meta.ArchivedAt,
+		ModelID:         meta.ModelID,
+		ProviderID:      meta.ProviderID,
+		ReasoningEffort: meta.ReasoningEffort,
 	}, nil
 }
 
@@ -219,15 +231,18 @@ func scanClaudeSessionMeta(path, projectDir, sessionID string) (claudeSessionMet
 		title = sessionID
 	}
 
-	archivedAt, err := readClaudeSessionArchivedAt(projectDir, sessionID)
+	sidecar, err := readClaudeSessionSidecar(projectDir, sessionID)
 	if err != nil {
 		return claudeSessionMetadata{}, err
 	}
 
 	return claudeSessionMetadata{
-		Title:        title,
-		MessageCount: len(assistantIDs) + userCount,
-		ArchivedAt:   archivedAt,
+		Title:           title,
+		MessageCount:    len(assistantIDs) + userCount,
+		ArchivedAt:      sidecar.archivedAt(),
+		ModelID:         strings.TrimSpace(sidecar.ModelID),
+		ProviderID:      strings.TrimSpace(sidecar.ProviderID),
+		ReasoningEffort: normalizeEffort(sidecar.ReasoningEffort),
 	}, nil
 }
 
@@ -251,23 +266,27 @@ func claudeSessionSidecarPath(projectDir, sessionID string) string {
 	return filepath.Join(projectDir, claudeSessionMetaDirName, sessionID+".json")
 }
 
-func readClaudeSessionArchivedAt(projectDir, sessionID string) (time.Time, error) {
+func readClaudeSessionSidecar(projectDir, sessionID string) (claudeSessionSidecar, error) {
 	path := claudeSessionSidecarPath(projectDir, sessionID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return time.Time{}, nil
+			return claudeSessionSidecar{}, nil
 		}
-		return time.Time{}, fmt.Errorf("claudecode: read session meta: %w", err)
+		return claudeSessionSidecar{}, fmt.Errorf("claudecode: read session meta: %w", err)
 	}
 	var meta claudeSessionSidecar
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return time.Time{}, fmt.Errorf("claudecode: decode session meta: %w", err)
+		return claudeSessionSidecar{}, fmt.Errorf("claudecode: decode session meta: %w", err)
 	}
-	if meta.ArchivedAtMillis <= 0 {
-		return time.Time{}, nil
+	return meta, nil
+}
+
+func (m claudeSessionSidecar) archivedAt() time.Time {
+	if m.ArchivedAtMillis <= 0 {
+		return time.Time{}
 	}
-	return time.UnixMilli(meta.ArchivedAtMillis).UTC(), nil
+	return time.UnixMilli(m.ArchivedAtMillis).UTC()
 }
 
 func writeClaudeSessionSidecar(projectDir, sessionID string, meta claudeSessionSidecar) error {

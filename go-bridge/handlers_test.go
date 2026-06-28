@@ -43,6 +43,7 @@ type fakeAgent struct {
 	sessionInfos       []core.AgentSessionInfo
 	sessionListErr     error
 	model              string
+	reasoningEffort    string
 	workDir            string
 	allowed            []string
 	sendHook           func(*fakeAgentSession, string)
@@ -316,6 +317,14 @@ func (f *fakeAgent) SetModel(model string) { f.model = model }
 func (f *fakeAgent) GetModel() string { return f.model }
 
 func (f *fakeAgent) AvailableModels(context.Context) []core.ModelOption { return nil }
+
+func (f *fakeAgent) SetReasoningEffort(effort string) { f.reasoningEffort = effort }
+
+func (f *fakeAgent) GetReasoningEffort() string { return f.reasoningEffort }
+
+func (f *fakeAgent) AvailableReasoningEfforts() []string {
+	return []string{"low", "medium", "high", "xhigh", "max", "ultra"}
+}
 
 func (f *fakeAgent) SetMode(mode string) { f.mode = mode }
 
@@ -1611,6 +1620,60 @@ func TestCodexCreateSessionIsLazyAndSendAppliesSelectedModel(t *testing.T) {
 	}
 }
 
+func TestClaudeCreateSessionIsLazyAndSendAppliesSelectedModelAndEffort(t *testing.T) {
+	agent := &fakeAgent{name: "claudecode", generateSessionID: true}
+	agent.sendHook = func(sess *fakeAgentSession, _ string) {
+		sess.events <- core.Event{Type: core.EventResult, SessionID: sess.id, Done: true}
+	}
+
+	handlers := newTestHandlers(t)
+	handlers.RegisterAgent("claudecode", agent)
+	serverConn, clientConn, cleanup := openTestConn(t)
+	defer cleanup()
+
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "claudecode",
+		Method:    "create_session",
+		RequestID: "create-claude-lazy",
+	})
+
+	messages := readJSONMaps(t, clientConn, 2)
+	data, _ := messages[1]["data"].(map[string]any)
+	sessionID, _ := data["id"].(string)
+	if !strings.HasPrefix(sessionID, "pending-") {
+		t.Fatalf("created session id = %q, want pending id", sessionID)
+	}
+	if len(agent.startCalls) != 0 {
+		t.Fatalf("start calls after create_session = %d, want 0", len(agent.startCalls))
+	}
+
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "claudecode",
+		Method:    "send_message",
+		RequestID: "send-claude-model-effort",
+		Params: mustJSONRaw(t, map[string]any{
+			"sessionId":       sessionID,
+			"content":         "hello",
+			"reasoningEffort": "ultra",
+			"model": map[string]any{
+				"id":         "glm-5.2",
+				"providerId": "default",
+			},
+		}),
+	})
+	_ = readJSONMaps(t, clientConn, 4)
+
+	if agent.model != "glm-5.2" {
+		t.Fatalf("agent model = %q, want glm-5.2", agent.model)
+	}
+	if agent.reasoningEffort != "ultra" {
+		t.Fatalf("agent reasoning effort = %q, want ultra", agent.reasoningEffort)
+	}
+	if len(agent.startCalls) != 1 {
+		t.Fatalf("start calls after send_message = %d, want 1", len(agent.startCalls))
+	}
+}
+
 func TestCodexPendingSessionRebindsToRealSessionID(t *testing.T) {
 	agent := &fakeAgent{name: "codex", generateSessionID: true}
 	agent.sendHook = func(sess *fakeAgentSession, _ string) {
@@ -2177,7 +2240,8 @@ func TestHandleArchiveSessionReturnsArchivedSession(t *testing.T) {
 
 func TestHandleGetSessionReturnsSingleSessionPayload(t *testing.T) {
 	agent := &fakeAgent{
-		name: "claudecode",
+		name:            "claudecode",
+		reasoningEffort: "ultra",
 		sessionInfos: []core.AgentSessionInfo{{
 			ID:           "ses_1",
 			Summary:      "Renamed session",
@@ -2206,6 +2270,62 @@ func TestHandleGetSessionReturnsSingleSessionPayload(t *testing.T) {
 	}
 	if got := session["title"]; got != "Renamed session" {
 		t.Fatalf("session title = %#v, want Renamed session", got)
+	}
+	if got := session["reasoningEffort"]; got != "ultra" {
+		t.Fatalf("session reasoningEffort = %#v, want ultra", got)
+	}
+}
+
+func TestClaudeListSessionsUsesRuntimeEffortWhenMetadataMissing(t *testing.T) {
+	agent := &fakeAgent{
+		name:            "claudecode",
+		reasoningEffort: "ultra",
+	}
+
+	projectsDir := t.TempDir()
+	projectDir := filepath.Join(projectsDir, "-tmp-claude-project")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(projectDir, "ses_1.jsonl")
+	if err := os.WriteFile(sessionPath, []byte("{}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	catalog := newClaudeSessionCatalog(projectsDir)
+	catalog.parseSession = func(string, time.Time) claudeSessionScanResult {
+		return claudeSessionScanResult{
+			Title:      "Historical Claude session",
+			ModelID:    "glm-5.2",
+			ProviderID: "default",
+			CreatedAt:  time.Unix(1710000000, 0).UTC(),
+			UpdatedAt:  time.Unix(1710000500, 0).UTC(),
+		}
+	}
+
+	handlers := newTestHandlers(t)
+	handlers.claudeSessions = catalog
+	handlers.RegisterAgent("claudecode", agent)
+	serverConn, clientConn, cleanup := openTestConn(t)
+	defer cleanup()
+
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "claudecode",
+		Method:    "list_sessions",
+		RequestID: "sessions-1",
+		Params:    mustJSONRaw(t, map[string]any{}),
+	})
+	messages := readJSONMaps(t, clientConn, 1)
+	data, _ := messages[0]["data"].(map[string]any)
+	sessionsRaw, _ := data["sessions"].([]any)
+	if len(sessionsRaw) != 1 {
+		t.Fatalf("sessions count = %d, want 1", len(sessionsRaw))
+	}
+	first, _ := sessionsRaw[0].(map[string]any)
+	if got := first["reasoningEffort"]; got != "ultra" {
+		t.Fatalf("list session reasoningEffort = %#v, want ultra", got)
+	}
+	if got := first["modelId"]; got != "glm-5.2" {
+		t.Fatalf("list session modelId = %#v, want glm-5.2", got)
 	}
 }
 
@@ -2830,13 +2950,13 @@ func TestReadFileAcceptsSubdirectoryWithinWorkspace(t *testing.T) {
 
 func TestListDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	
+
 	// Create some dirs and files
 	dir1 := filepath.Join(workspace, "dir1")
 	dir2 := filepath.Join(workspace, "dir2")
 	hiddenDir := filepath.Join(workspace, ".hidden_dir")
 	file1 := filepath.Join(workspace, "file1.txt")
-	
+
 	if err := os.Mkdir(dir1, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2849,34 +2969,34 @@ func TestListDirectory(t *testing.T) {
 	if err := os.WriteFile(file1, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	h := newTestHandlers(t)
 	conn := &readFileCaptureConn{}
-	
+
 	// Test listing the workspace
 	params, _ := json.Marshal(map[string]interface{}{"path": workspace})
 	h.handleListDirectory(conn, WireMessage{
 		RequestID: "req_list",
 		Params:    params,
 	})
-	
+
 	if conn.err != nil {
 		t.Fatalf("expected nil error, got %v", conn.err)
 	}
-	
+
 	resMap, ok := conn.data.(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected map[string]interface{}, got %T", conn.data)
 	}
-	
+
 	currentPath := resMap["currentPath"].(string)
 	if currentPath != workspace {
 		t.Errorf("expected currentPath %s, got %s", workspace, currentPath)
 	}
-	
+
 	itemsRaw := resMap["items"]
 	itemsJSON, _ := json.Marshal(itemsRaw)
-	
+
 	type directoryItem struct {
 		Name        string `json:"name"`
 		Path        string `json:"path"`
@@ -2884,15 +3004,15 @@ func TestListDirectory(t *testing.T) {
 	}
 	var items []directoryItem
 	json.Unmarshal(itemsJSON, &items)
-	
+
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d: %#v", len(items), items)
 	}
-	
+
 	hasDir1 := false
 	hasDir2 := false
 	hasFile1 := false
-	
+
 	for _, item := range items {
 		if strings.HasPrefix(item.Name, ".") {
 			t.Errorf("should not contain hidden item: %s", item.Name)
@@ -2915,7 +3035,7 @@ func TestListDirectory(t *testing.T) {
 			}
 		}
 	}
-	
+
 	if !hasDir1 || !hasDir2 || !hasFile1 {
 		t.Errorf("missing expected items, got: %#v", items)
 	}
@@ -3025,5 +3145,3 @@ func TestSessionRuntimeStateEnrichment(t *testing.T) {
 		t.Fatalf("get_session (external) runtimeState = %#v, want running", got)
 	}
 }
-
-
