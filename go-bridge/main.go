@@ -89,6 +89,7 @@ func Main() {
 
 	handlers := NewHandlersWithContext(ctx)
 	handlers.SetRelayEnabled(*relayEnabled)
+	handlers.SetDataDir(*dataDirPath)
 	if *dataDirPath != "" {
 		handlers.SetTranscriptIndexBaseDir(*dataDirPath + string(filepath.Separator) + "transcript-index")
 	}
@@ -125,6 +126,27 @@ func Main() {
 		}
 		if err := applyProviderSeed(agent, agentName, *workDir); err != nil {
 			slog.Warn("go-bridge: failed to load provider seed", "agent", agentName, "error", err)
+		}
+
+		// claudecode：启动时注入默认 reasoning effort。Claude Code transcript 不记录
+		// per-session effort，故「session 的 effort」= Mac 端 Claude Code 当前的全局 effort。
+		// 真值源优先级：iOS 持久化 override（claude-effort.json）> ~/.claude/settings.json
+		// 的 effortLevel > env CLAUDE_CODE_EFFORT_LEVEL。注入后 enrichSessionStateWithAgent
+		// 的回填会把它带给 iOS，使打开任意 Claude Code session 都显示与 Mac 端一致的智能等级。
+		if agentName == "claudecode" {
+			effort := resolveClaudeDefaultEffort(*dataDirPath)
+			if effort == "" {
+				slog.Info("go-bridge: claudecode default effort: none (no settings.json effortLevel and no iOS override)")
+			} else {
+				source := "settings.json"
+				if normalizeClaudeRuntimeEffort(loadClaudeEffortOverride(*dataDirPath)) == effort {
+					source = "ios-override"
+				}
+				if re, ok := agent.(core.ReasoningEffortSwitcher); ok {
+					re.SetReasoningEffort(effort)
+				}
+				slog.Info("go-bridge: claudecode default effort applied", "effort", effort, "source", source)
+			}
 		}
 
 		handlers.RegisterAgent(id, agent)

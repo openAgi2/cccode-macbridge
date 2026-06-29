@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+### 2026-06-28 — Claude Code effort 真值源 + iOS 覆盖持久化
+
+- **修正 Claude Code session effort 同步此前实际不生效**：上一轮虽已把「当前 Claude runtime effort」回填进历史 session，但 MacBridge 的 Claude runtime effort 此前没有任何来源（macOS App 不配置、iOS 仅在发消息时回传），恒为空，导致 iOS 仍显示「自动」。现已改为启动时从 `~/.claude/settings.json` 的 `effortLevel`（Mac 端 Claude Code 的真实全局 effort 偏好；回退到同文件 env 的 `CLAUDE_CODE_EFFORT_LEVEL`）读取并注入 Claude runtime，因此打开任意 Claude Code session 都能显示与 Mac 端一致的智能等级（如 `Extra High`）。
+- **iOS 显式改动的 effort 现在跨重启持久化**：当 iOS 发消息时显式改变 effort 且与当前值不同，MacBridge 会把该选择原子写入数据目录的 `claude-effort.json`，重启后优先于 `settings.json` 生效；未显式改动时仍以 `settings.json` 为准。
+- 背景澄清：Claude Code 的 transcript 不记录 per-session effort（已抽样确认），故「某历史 session 当时的 effort」不可恢复；MacBridge 能忠实反映的是「Mac 端 Claude Code 当前的全局 effort」及其在 iOS 上的最近一次选择。
+
 ### 2026-06-28 — Claude Code session 同步模型与智能等级
 
 - Claude Code 历史 session 列表和单 session 查询现在会把 MacBridge 当前 Claude runtime 的 reasoning effort 补入缺少 effort 元数据的旧 transcript，iOS 打开这些 session 时可显示与 Mac 端一致的模型和智能等级（如 `glm-5.2` + `Ultra`）。

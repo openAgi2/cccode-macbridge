@@ -50,7 +50,10 @@ type Handlers struct {
 	relayUpgradeProvisioner RelayUpgradeProvisioner
 	relayUpgradeMu          sync.Mutex
 	bridgeID                string
-	relayHelloHandler       func(conn Connection, msg *WireMessage)
+	// dataDir 是 Bridge 数据目录（--data-dir），用于持久化 iOS 端为 Claude Code
+	// 显式选择的 reasoning effort 覆盖（claude-effort.json）。空表示未提供（dev 模式）。
+	dataDir           string
+	relayHelloHandler func(conn Connection, msg *WireMessage)
 	claudeSessions          *claudeSessionCatalog
 	pendingClaudeRuntime    map[string]claudeRuntimeSelection
 	transcriptIndex         *transcriptindex.Store
@@ -135,6 +138,14 @@ func (h *Handlers) SetBridgeID(bridgeID string) {
 	h.bridgeID = bridgeID
 	h.mu.Unlock()
 	h.deliveryPrekeys.SetBridgeID(bridgeID)
+}
+
+// SetDataDir 记录 Bridge 数据目录，用于持久化 iOS 端为 Claude Code 显式选择的
+// reasoning effort 覆盖。应在 agent 注册前由 server（main）调用。
+func (h *Handlers) SetDataDir(dir string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dataDir = dir
 }
 
 // ConfigureRelayDelivery 接入 Mac→Relay 离线 milestone 投递路径。
@@ -1795,7 +1806,7 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 	if params.Directory != "" {
 		switchDir(agent, params.Directory)
 	}
-	applySendMessageRuntimeOptions(agent, params)
+	applySendMessageRuntimeOptions(agent, params, h.dataDir)
 	claudeRuntime := claudeRuntimeSelectionFromAgent(agent, params)
 
 	// P1-5: 默认日志不记录用户消息正文，仅记录长度，避免 prompt/源码/凭据进入日志、崩溃包或诊断。
@@ -1879,7 +1890,7 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 	h.startRelayIfNotRunning(params.SessionID, sess, conn, msg.BackendID)
 }
 
-func applySendMessageRuntimeOptions(agent core.Agent, params SendMessageParams) {
+func applySendMessageRuntimeOptions(agent core.Agent, params SendMessageParams, dataDir string) {
 	if modelID := selectedModelParam(agent, params.Model); modelID != "" {
 		if ms, ok := agent.(core.ModelSwitcher); ok {
 			ms.SetModel(modelID)
@@ -1887,7 +1898,15 @@ func applySendMessageRuntimeOptions(agent core.Agent, params SendMessageParams) 
 	}
 	if params.ReasoningEffort != "" {
 		if re, ok := agent.(core.ReasoningEffortSwitcher); ok {
+			// 仅在 effort 实际变化时持久化：避免每条消息都写文件，也避免把回显的
+			// settings.json 默认值当成显式 override 落盘。持久化的值代表「该 bridge 的
+			// Claude 最近一次实际使用的 effort」，重启后作为 override 优先于 settings.json。
+			prev := re.GetReasoningEffort()
 			re.SetReasoningEffort(params.ReasoningEffort)
+			if agent.Name() == "claudecode" &&
+				normalizeClaudeRuntimeEffort(params.ReasoningEffort) != normalizeClaudeRuntimeEffort(prev) {
+				saveClaudeEffortOverride(dataDir, params.ReasoningEffort)
+			}
 		}
 	}
 }
