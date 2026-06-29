@@ -37,7 +37,10 @@ type passiveSubscriber struct {
 
 func newPassiveSubscriber(ctx context.Context, a *Agent) *passiveSubscriber {
 	a.mu.RLock()
-	url := a.appServerURL
+	url := ""
+	if a.appServerURLSet {
+		url = a.appServerURL
+	}
 	a.mu.RUnlock()
 
 	subCtx, cancel := context.WithCancel(ctx)
@@ -585,10 +588,14 @@ func (s *passiveSubscriber) closeConnAndEvents() {
 func (a *Agent) Subscribe(ctx context.Context) (<-chan core.Event, error) {
 	a.mu.RLock()
 	backend := a.backend
+	appServerURLSet := a.appServerURLSet
 	a.mu.RUnlock()
 
 	if backend != "app_server" {
 		return nil, fmt.Errorf("codex: passive subscription only supported in app_server mode")
+	}
+	if !appServerURLSet {
+		return nil, fmt.Errorf("codex: passive subscription requires explicit shared app-server URL")
 	}
 
 	sub := newPassiveSubscriber(ctx, a)

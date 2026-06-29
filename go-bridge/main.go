@@ -155,7 +155,7 @@ func Main() {
 		}
 		slog.Info("go-bridge: agent registered", "backendId", id, "agent", agentName, "workDir", *workDir)
 
-		if sub, ok := agent.(core.EventSubscriber); ok {
+		if sub, ok := agent.(core.EventSubscriber); ok && shouldStartPassiveSubscription(id, *codexBackend, *codexAppServerURL) {
 			go startPassiveSubscription(ctx, handlers, id, sub)
 		}
 
@@ -666,6 +666,13 @@ func startPassiveSubscription(ctx context.Context, h *Handlers, backendID string
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+func shouldStartPassiveSubscription(backendID, codexBackendMode, codexAppServerURL string) bool {
+	if backendID == "codex" {
+		return normalizeCodexBackend(codexBackendMode) == "app_server" && strings.TrimSpace(codexAppServerURL) != ""
+	}
+	return true
 }
 
 type agentOptionsConfig struct {

@@ -79,7 +79,7 @@ class AppDependencies: ObservableObject {
             logDir: logDir,
             workDir: FileManager.default.homeDirectoryForCurrentUser.path,
             codexBackend: "app_server",
-            codexAppServerURL: "ws://127.0.0.1:4141",
+            codexAppServerURL: UserDefaults.standard.string(forKey: "codexAppServerURL") ?? "",
             opencodeUser: opencodeUser,
             opencodePass: opencodePass,
             logFilePath: logFilePath,

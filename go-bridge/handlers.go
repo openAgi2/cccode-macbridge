@@ -52,11 +52,11 @@ type Handlers struct {
 	bridgeID                string
 	// dataDir 是 Bridge 数据目录（--data-dir），用于持久化 iOS 端为 Claude Code
 	// 显式选择的 reasoning effort 覆盖（claude-effort.json）。空表示未提供（dev 模式）。
-	dataDir           string
-	relayHelloHandler func(conn Connection, msg *WireMessage)
-	claudeSessions          *claudeSessionCatalog
-	pendingClaudeRuntime    map[string]claudeRuntimeSelection
-	transcriptIndex         *transcriptindex.Store
+	dataDir              string
+	relayHelloHandler    func(conn Connection, msg *WireMessage)
+	claudeSessions       *claudeSessionCatalog
+	pendingClaudeRuntime map[string]claudeRuntimeSelection
+	transcriptIndex      *transcriptindex.Store
 	// capabilityPolicy 是集中式 RPC 授权层（P3 架构演进，§3.2/§8）。
 	capabilityPolicy *CapabilityPolicy
 	relayEnabled     bool
@@ -3303,8 +3303,7 @@ func (h *Handlers) handleGetSessionMessages(conn Connection, msg WireMessage, ag
 	h.subscribeConnToSession(conn, msg, params.SessionID)
 
 	// 如果已经有活跃 session 对象（先前 send_message 创建），启动事件转发。
-	// 外部 Codex turn 由进程级 EventSubscriber 转发。读取历史时不能同步
-	// resume thread，否则纯读取路径会被 app-server 握手阻塞。
+	// 纯读取历史时不能同步 resume thread，否则 app-server/CLI 握手会把只读路径变成执行路径。
 	h.mu.Lock()
 	sess, hasSess := h.getSession(params.SessionID)
 	h.mu.Unlock()
@@ -3313,7 +3312,7 @@ func (h *Handlers) handleGetSessionMessages(conn Connection, msg WireMessage, ag
 		slog.Info("go-bridge: get_session_messages — existing session, starting relay", "backendID", msg.BackendID, "sessionID", params.SessionID)
 		h.startRelayIfNotRunning(params.SessionID, sess, conn, msg.BackendID)
 	} else {
-		slog.Info("go-bridge: get_session_messages — using process-level passive subscription", "backendID", msg.BackendID, "sessionID", params.SessionID)
+		slog.Info("go-bridge: get_session_messages — no active session, reading persisted history", "backendID", msg.BackendID, "sessionID", params.SessionID)
 		// 对于没有 AgentSession 的 claudecode session（外部 Desktop 创建），
 		// 启动基于 transcript 文件监视的事件转发。
 		h.startClaudeSessionFileRelay(params.SessionID, conn, msg.BackendID)

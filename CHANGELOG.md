@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### 2026-06-29 — Codex prompt 模板发送不再依赖共享 4141
+
+- 修复 iOS 在 Codex 模式点击「继续任务 / 总结当前状态 / 只跑相关测试 / 解释失败原因」后报 `codex app-server ws dial ws://127.0.0.1:4141 ... connection refused` 的问题：MacBridge 产品默认不再强制注入共享 Codex app-server URL，未显式配置 URL 时改走 go-bridge 已有的 stdio app-server session 路径。
+- 当未配置共享 app-server URL 时，Codex descriptor 会标记为需要历史轮询，避免继续假定存在进程级 passive websocket 事件流；显式配置共享 URL 的高级用法仍保留原 websocket/broadcast 行为。
+
 ### 2026-06-28 — Claude Code effort 真值源 + iOS 覆盖持久化
 
 - **修正 Claude Code session effort 同步此前实际不生效**：上一轮虽已把「当前 Claude runtime effort」回填进历史 session，但 MacBridge 的 Claude runtime effort 此前没有任何来源（macOS App 不配置、iOS 仅在发消息时回传），恒为空，导致 iOS 仍显示「自动」。现已改为启动时从 `~/.claude/settings.json` 的 `effortLevel`（Mac 端 Claude Code 的真实全局 effort 偏好；回退到同文件 env 的 `CLAUDE_CODE_EFFORT_LEVEL`）读取并注入 Claude runtime，因此打开任意 Claude Code session 都能显示与 Mac 端一致的智能等级（如 `Extra High`）。

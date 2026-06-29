@@ -125,18 +125,19 @@ turn 完成时，在线订阅设备收到事件；未在线设备的通知写入
 支持两种模式：
 
 - `exec`：由 runtime 启动 Codex CLI session；
-- `app_server`：连接 Codex app-server，并通过 passive subscriber 接收外部 thread/turn
-  事件。产品 `RuntimeConfig` 默认显式使用 `ws://127.0.0.1:4141`，即共享 TCP service；
-  未显式提供 URL 时，agent session 也支持通过 stdio 启动自己的 app-server。
+- `app_server`：通过 Codex app-server 协议运行 session。产品 `RuntimeConfig` 默认不显式
+  提供 URL，因此 agent session 通过 stdio 启动自己的 app-server；只有显式配置
+  `-codex-app-server-url` 时，才连接共享 TCP service 并通过 passive subscriber 接收外部
+  thread/turn 事件。
 
 `app_server` 的 create 是 lazy：可能先返回 `pending-*`，首次 send 后再绑定真实
 thread id。session registry、订阅 key 与 iOS 当前 session 都必须随 rebind 更新。
 
-当前 descriptor 对 Codex 使用 broadcast 模型，且
-`requiresPollingForExternalTurns=false`。iOS 对“中途进入一个已运行 Codex turn”仍可使用
-历史变化探测作为恢复手段，但不应把它当成 MacBridge 缺少 passive event 的长期替代。
+默认 stdio app-server 模式下，descriptor 对 Codex 使用 `session_process` 模型，且
+`requiresPollingForExternalTurns=true`，iOS 通过历史变化探测旁观外部 turn。显式共享 URL
+模式下才使用 broadcast/passive event，并可关闭外部 turn 轮询。
 
-产品态检查：
+共享 app-server 模式检查：
 
 ```bash
 command -v codex

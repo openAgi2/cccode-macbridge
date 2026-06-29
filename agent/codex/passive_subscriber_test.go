@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,8 +74,9 @@ func (f *fakeAppServer) close() { f.server.Close() }
 
 func testAgent(url string) *Agent {
 	return &Agent{
-		backend:      "app_server",
-		appServerURL: url,
+		backend:         "app_server",
+		appServerURL:    url,
+		appServerURLSet: true,
 	}
 }
 
@@ -103,6 +105,20 @@ func TestPassiveSubscribe_DialFailure(t *testing.T) {
 	_, err := agent.Subscribe(context.Background())
 	if err == nil {
 		t.Fatal("expected dial error, got nil")
+	}
+}
+
+func TestPassiveSubscribe_ImplicitAppServerURLRejected(t *testing.T) {
+	agent := &Agent{
+		backend:      "app_server",
+		appServerURL: "ws://127.0.0.1:3845",
+	}
+	_, err := agent.Subscribe(context.Background())
+	if err == nil {
+		t.Fatal("expected explicit URL requirement error, got nil")
+	}
+	if !strings.Contains(err.Error(), "explicit shared app-server URL") {
+		t.Fatalf("error = %q, want explicit URL requirement", err.Error())
 	}
 }
 

@@ -68,10 +68,15 @@ func agentDisplayName(id string, agent core.Agent) string {
 
 // agentLiveEvents 根据 agent ID 返回实时事件模型。
 // claude 进程模型是 stdin/stdout pipe，无法广播外部 turn 事件；
-// opencode 和 codex 使用服务事件流。
-func agentLiveEvents(id string) string {
+// opencode 使用服务事件流；codex 只有显式共享 app-server URL 时才有进程级广播。
+func agentLiveEvents(id string, codexBackendMode string, cfg *AgentDetectionConfig) string {
 	switch id {
 	case "claude":
+		return "session_process"
+	case "codex":
+		if codexBackendMode == "app_server" && cfg != nil && strings.TrimSpace(cfg.CodexAppServerURL) != "" {
+			return "broadcast"
+		}
 		return "session_process"
 	default:
 		return "broadcast"
@@ -79,8 +84,14 @@ func agentLiveEvents(id string) string {
 }
 
 // agentRequiresPolling 根据 agent ID 判断是否需要轮询外部 turn。
-func agentRequiresPolling(id string) bool {
-	return id == "claude" || id == "opencode"
+func agentRequiresPolling(id string, codexBackendMode string, cfg *AgentDetectionConfig) bool {
+	if id == "claude" || id == "opencode" {
+		return true
+	}
+	if id == "codex" && codexBackendMode == "app_server" {
+		return cfg == nil || strings.TrimSpace(cfg.CodexAppServerURL) == ""
+	}
+	return false
 }
 
 // deriveCapabilities 从 agent 接口断言推导能力列表，
@@ -156,8 +167,8 @@ func BuildAgentDescriptor(id string, agent core.Agent, codexBackendMode string, 
 		Status:                          status,
 		Reason:                          reason,
 		Capabilities:                    deriveCapabilities(id, agent, codexBackendMode),
-		LiveEvents:                      agentLiveEvents(id),
-		RequiresPollingForExternalTurns: agentRequiresPolling(id),
+		LiveEvents:                      agentLiveEvents(id, codexBackendMode, cfg),
+		RequiresPollingForExternalTurns: agentRequiresPolling(id, codexBackendMode, cfg),
 	}
 }
 
@@ -182,7 +193,7 @@ type AgentDetectionConfig struct {
 	OpenCodeURL       string // OpenCode health check URL，默认 http://localhost:64667
 	OpenCodeUser      string // OpenCode auth username
 	OpenCodePass      string // OpenCode auth password
-	CodexAppServerURL string // Codex app-server WebSocket URL，默认 ws://localhost:4141
+	CodexAppServerURL string // Optional shared Codex app-server WebSocket URL.
 }
 
 // detectAgentStatus 检测单个 agent 的可用性状态。
@@ -204,7 +215,7 @@ func detectAgentStatus(id string, codexBackendMode string, cfg *AgentDetectionCo
 		}
 		return detectOpenCodeService(ocURL, ocUser, ocPass)
 	case "codex":
-		codexURL := "ws://localhost:4141"
+		codexURL := ""
 		if cfg != nil && cfg.CodexAppServerURL != "" {
 			codexURL = cfg.CodexAppServerURL
 		}
@@ -276,6 +287,9 @@ func detectOpenCodeService(baseURL, username, password string) (AgentStatus, str
 // app_server 模式：WebSocket dial 5秒超时；exec 模式：exec.LookPath + --version（3秒超时）。
 func detectCodexService(codexBackendMode string, appServerURL string) (AgentStatus, string) {
 	if codexBackendMode == "app_server" {
+		if strings.TrimSpace(appServerURL) == "" {
+			return detectCodexCLI()
+		}
 		return detectCodexAppServer(appServerURL)
 	}
 	return detectCodexCLI()

@@ -99,8 +99,23 @@ func TestOpenCodeDescriptorBroadcastRequiresPollingProtection(t *testing.T) {
 	}
 }
 
-func TestCodexDescriptorBroadcastNoPolling(t *testing.T) {
-	d := BuildAgentDescriptor("codex", &descriptorFakeAgent{name: "codex"}, "", nil)
+func TestCodexDescriptorImplicitAppServerUsesSessionProcessAndPolling(t *testing.T) {
+	d := BuildAgentDescriptor("codex", &descriptorFakeAgent{name: "codex"}, "app_server", &AgentDetectionConfig{})
+	if d.LiveEvents != "session_process" {
+		t.Fatalf("LiveEvents = %q, want session_process", d.LiveEvents)
+	}
+	if !d.RequiresPollingForExternalTurns {
+		t.Fatal("RequiresPollingForExternalTurns = false, want true")
+	}
+	if d.Kind != "codex" {
+		t.Fatalf("Kind = %q, want codex", d.Kind)
+	}
+}
+
+func TestCodexDescriptorExplicitSharedAppServerBroadcastNoPolling(t *testing.T) {
+	d := BuildAgentDescriptor("codex", &descriptorFakeAgent{name: "codex"}, "app_server", &AgentDetectionConfig{
+		CodexAppServerURL: "ws://127.0.0.1:1",
+	})
 	if d.LiveEvents != "broadcast" {
 		t.Fatalf("LiveEvents = %q, want broadcast", d.LiveEvents)
 	}

@@ -58,7 +58,7 @@ struct RuntimeConfig {
         drivers: [String] = ["claude", "opencode", "codex"],
         workDir: String = FileManager.default.homeDirectoryForCurrentUser.path,
         codexBackend: String = "app_server",
-        codexAppServerURL: String = "ws://127.0.0.1:4141",
+        codexAppServerURL: String = "",
         opencodeUser: String = "",
         opencodePass: String = "",
         logFilePath: String = "",
