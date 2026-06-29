@@ -1074,6 +1074,7 @@ func (h *Handlers) ocHandleSendMessage(conn Connection, msg WireMessage, dir str
 		Agent           string                 `json:"agent,omitempty"`
 		Model           map[string]interface{} `json:"model,omitempty"`
 		ReasoningEffort string                 `json:"reasoningEffort,omitempty"`
+		Attachments     []AttachmentInput      `json:"attachments,omitempty"`
 	}
 	if msg.Params != nil {
 		json.Unmarshal(msg.Params, &params)
@@ -1101,7 +1102,8 @@ func (h *Handlers) ocHandleSendMessage(conn Connection, msg WireMessage, dir str
 		Directory: dir,
 	})
 
-	if err := sess.Send(params.Content, nil, nil); err != nil {
+	images, files := splitAttachments(params.Attachments)
+	if err := sess.Send(params.Content, images, files); err != nil {
 		conn.SendResult(msg.RequestID, nil, &WireError{Code: "send_failed", Message: err.Error()})
 		return
 	}
@@ -1881,7 +1883,8 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 		Directory: dir,
 	})
 
-	if err := sess.Send(params.Content, nil, nil); err != nil {
+	images, files := splitAttachments(params.Attachments)
+	if err := sess.Send(params.Content, images, files); err != nil {
 		conn.SendResult(msg.RequestID, nil, &WireError{Code: "send_failed", Message: err.Error()})
 		return
 	}

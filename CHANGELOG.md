@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### 2026-06-30 — send_message 转发图片/文件附件到 agent（跨仓联动）
+
+- **修复 iOS 发来的图片/文件附件被 go-bridge 丢弃**：`SendMessageParams` 原无 attachments 字段，`handleSendMessage`（主路径）与 `ocHandleSendMessage`（opencode 路径）都硬编码 `sess.Send(content, nil, nil)`，导致 agent 永远收不到图。现新增 `AttachmentInput` + `splitAttachments`（`go-bridge/attachments.go`）：按 unified-bridge-protocol 的 `AttachmentInput{kind,mime,filename,base64}` 解码 base64，按 kind/mime 拆成 `core.ImageAttachment`/`core.FileAttachment` 传给 `sess.Send`。三个 driver（claudecode/codex/opencode）都已消费图片+文件，故对所有 backend 生效；非法/空 base64 附件被丢弃不伪造。
+- 与 iOS 侧联动：iOS 端 bridge client 现按协议上送 attachments（见 cordcode-ios CHANGELOG）。协议 spec（`docs/protocol/unified-bridge-protocol.md`）早已定义 attachments，本轮补齐传输层实现。
+
 ### 2026-06-29 — Codex prompt 模板发送不再依赖共享 4141
 
 - 修复 iOS 在 Codex 模式点击「继续任务 / 总结当前状态 / 只跑相关测试 / 解释失败原因」后报 `codex app-server ws dial ws://127.0.0.1:4141 ... connection refused` 的问题：MacBridge 产品默认不再强制注入共享 Codex app-server URL，未显式配置 URL 时改走 go-bridge 已有的 stdio app-server session 路径。

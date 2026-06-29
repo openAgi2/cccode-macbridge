@@ -92,6 +92,7 @@ type SendMessageParams struct {
 	Directory       string                 `json:"directory,omitempty"`
 	Model           map[string]interface{} `json:"model,omitempty"`
 	ReasoningEffort string                 `json:"reasoningEffort,omitempty"`
+	Attachments     []AttachmentInput      `json:"attachments,omitempty"`
 }
 
 type AbortGenerationParams struct {
