@@ -53,6 +53,78 @@ func TestGetRichSessionHistory_TextOnly(t *testing.T) {
 	}
 }
 
+func TestGetRichSessionHistory_UserInputImageFiles(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), ".codex")
+	sessionID := "rich-user-image"
+	imageURL := "data:image/png;base64,aGVsbG8="
+	rollout := "" +
+		`{"type":"session_meta","payload":{"id":"` + sessionID + `","cwd":"/tmp"}}` + "\n" +
+		`{"type":"response_item","timestamp":"2026-05-20T12:00:01Z","payload":{"role":"user","content":[{"type":"input_text","text":"这个呢"},{"type":"input_image","image_url":"` + imageURL + `","detail":"high"}]}}` + "\n"
+	writeTestRollout(t, codexHome, sessionID, rollout)
+
+	entries, err := getRichSessionHistory(sessionID, codexHome, 0)
+	if err != nil {
+		t.Fatalf("getRichSessionHistory() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Content != "这个呢" {
+		t.Errorf("entry.Content = %q, want 这个呢", entry.Content)
+	}
+	if len(entry.Files) != 1 {
+		t.Fatalf("len(entry.Files) = %d, want 1", len(entry.Files))
+	}
+	if entry.Files[0]["mime"] != "image/png" {
+		t.Errorf("file mime = %v, want image/png", entry.Files[0]["mime"])
+	}
+	if entry.Files[0]["url"] != imageURL {
+		t.Errorf("file url = %v, want original data URL", entry.Files[0]["url"])
+	}
+	if len(entry.Parts) != 2 {
+		t.Fatalf("len(entry.Parts) = %d, want 2", len(entry.Parts))
+	}
+	if entry.Parts[0]["type"] != "text" || entry.Parts[1]["type"] != "file" {
+		t.Errorf("entry.Parts types = %v, want text,file", entry.Parts)
+	}
+}
+
+func TestGetRichSessionHistory_RepeatedUserPromptsKeepDistinctImages(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), ".codex")
+	sessionID := "rich-repeated-image"
+	firstImageURL := "data:image/jpeg;base64,Zmlyc3Q="
+	secondImageURL := "data:image/jpeg;base64,c2Vjb25k"
+	rollout := "" +
+		`{"type":"session_meta","payload":{"id":"` + sessionID + `","cwd":"/tmp"}}` + "\n" +
+		`{"type":"response_item","timestamp":"2026-05-20T12:00:01Z","payload":{"role":"user","content":[{"type":"input_text","text":"这个呢"},{"type":"input_image","image_url":"` + firstImageURL + `"}]}}` + "\n" +
+		`{"type":"response_item","timestamp":"2026-05-20T12:00:02Z","payload":{"role":"user","content":[{"type":"input_text","text":"这个呢"},{"type":"input_image","image_url":"` + secondImageURL + `"}]}}` + "\n"
+	writeTestRollout(t, codexHome, sessionID, rollout)
+
+	entries, err := getRichSessionHistory(sessionID, codexHome, 0)
+	if err != nil {
+		t.Fatalf("getRichSessionHistory() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+	if entries[0].Content != "这个呢" || entries[1].Content != "这个呢" {
+		t.Fatalf("entry contents = %q, %q; want repeated prompt text", entries[0].Content, entries[1].Content)
+	}
+	if len(entries[0].Files) != 1 || len(entries[1].Files) != 1 {
+		t.Fatalf("file counts = %d, %d; want 1,1", len(entries[0].Files), len(entries[1].Files))
+	}
+	if entries[0].Files[0]["url"] != firstImageURL {
+		t.Errorf("first file url = %v, want first image", entries[0].Files[0]["url"])
+	}
+	if entries[1].Files[0]["url"] != secondImageURL {
+		t.Errorf("second file url = %v, want second image", entries[1].Files[0]["url"])
+	}
+	if entries[0].Files[0]["id"] == entries[1].Files[0]["id"] {
+		t.Errorf("file ids should be distinct for distinct image URLs: %v", entries[0].Files[0]["id"])
+	}
+}
+
 func TestGetRichSessionHistory_CommandExecution(t *testing.T) {
 	codexHome := filepath.Join(t.TempDir(), ".codex")
 	sessionID := "rich-cmd-exec"

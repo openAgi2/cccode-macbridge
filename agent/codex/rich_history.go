@@ -3,6 +3,7 @@ package codex
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -129,8 +130,9 @@ func ParseRichHistoryFromReader(r io.Reader, limit int) ([]core.RichHistoryEntry
 			Arguments json.RawMessage `json:"arguments"`
 			Summary   []string        `json:"summary"`
 			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				ImageURL string `json:"image_url"`
 			} `json:"content"`
 		}
 		if json.Unmarshal(raw.Payload, &item) != nil {
@@ -140,15 +142,30 @@ func ParseRichHistoryFromReader(r io.Reader, limit int) ([]core.RichHistoryEntry
 		switch {
 		case item.Role == "user" && len(item.Content) > 0:
 			builder.flush()
+			var textParts []string
+			parts := make([]map[string]any, 0, len(item.Content))
+			files := make([]map[string]any, 0)
 			for _, c := range item.Content {
 				if c.Type == "input_text" && c.Text != "" && isUserPrompt(c.Text) {
-					builder.addEntry(core.RichHistoryEntry{
-						Role:      "user",
-						Content:   c.Text,
-						Parts:     []map[string]any{{"type": "text", "content": c.Text}},
-						Timestamp: ts,
-					})
+					textParts = append(textParts, c.Text)
+					parts = append(parts, map[string]any{"type": "text", "content": c.Text})
+					continue
 				}
+				if c.Type == "input_image" {
+					if file, ok := codexInputImageFile(c.ImageURL, len(files)+1); ok {
+						files = append(files, file)
+						parts = append(parts, map[string]any{"type": "file", "file": file})
+					}
+				}
+			}
+			if len(textParts) > 0 || len(files) > 0 {
+				builder.addEntry(core.RichHistoryEntry{
+					Role:      "user",
+					Content:   strings.Join(textParts, "\n"),
+					Parts:     parts,
+					Files:     files,
+					Timestamp: ts,
+				})
 			}
 
 		case item.Role == "assistant" && len(item.Content) > 0 && (item.Type == "" || item.Type == "message"):
@@ -248,6 +265,56 @@ func extractToolInput(toolName string, raw json.RawMessage) string {
 		return s
 	}
 	return string(raw)
+}
+
+func codexInputImageFile(imageURL string, index int) (map[string]any, bool) {
+	imageURL = strings.TrimSpace(imageURL)
+	if imageURL == "" {
+		return nil, false
+	}
+	mime := codexInputImageMime(imageURL)
+	hash := sha256.Sum256([]byte(imageURL))
+	id := fmt.Sprintf("codex-image-%x", hash[:8])
+	return map[string]any{
+		"id":       id,
+		"mime":     mime,
+		"url":      imageURL,
+		"filename": fmt.Sprintf("image-%d%s", index, codexImageExtension(mime)),
+	}, true
+}
+
+func codexInputImageMime(imageURL string) string {
+	const defaultMime = "image/jpeg"
+	if !strings.HasPrefix(imageURL, "data:") {
+		return defaultMime
+	}
+	metadata, _, ok := strings.Cut(strings.TrimPrefix(imageURL, "data:"), ",")
+	if !ok {
+		return defaultMime
+	}
+	mediaType, _, _ := strings.Cut(metadata, ";")
+	mediaType = strings.TrimSpace(strings.ToLower(mediaType))
+	if strings.HasPrefix(mediaType, "image/") {
+		return mediaType
+	}
+	return defaultMime
+}
+
+func codexImageExtension(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/heic":
+		return ".heic"
+	case "image/heif":
+		return ".heif"
+	default:
+		return ".jpg"
+	}
 }
 
 type richHistoryBuilder struct {

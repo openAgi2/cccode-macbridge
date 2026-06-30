@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### 2026-06-30 — Codex 历史 session 下发用户图片附件
+
+- **修复 Codex 历史消息丢失 `input_image`**：Codex JSONL 的 rich history 解析现在会把用户消息里的 `input_image.image_url` 转成协议 `files/parts`，iOS 打开历史 session 时可拿到 Mac 端 Codex 已显示的真实图片。
+- **相同 prompt 文本的多图消息保持区分**：图片 file id 由图片 URL 稳定派生；多条同文案用户消息各自携带不同图片时，下发结果不会把后续图片压成前一张。
+
 ### 2026-06-30 — send_message 转发图片/文件附件到 agent（跨仓联动）
 
 - **修复 iOS 发来的图片/文件附件被 go-bridge 丢弃**：`SendMessageParams` 原无 attachments 字段，`handleSendMessage`（主路径）与 `ocHandleSendMessage`（opencode 路径）都硬编码 `sess.Send(content, nil, nil)`，导致 agent 永远收不到图。现新增 `AttachmentInput` + `splitAttachments`（`go-bridge/attachments.go`）：按 unified-bridge-protocol 的 `AttachmentInput{kind,mime,filename,base64}` 解码 base64，按 kind/mime 拆成 `core.ImageAttachment`/`core.FileAttachment` 传给 `sess.Send`。三个 driver（claudecode/codex/opencode）都已消费图片+文件，故对所有 backend 生效；非法/空 base64 附件被丢弃不伪造。
