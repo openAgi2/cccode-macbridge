@@ -1674,6 +1674,51 @@ func TestClaudeCreateSessionIsLazyAndSendAppliesSelectedModelAndEffort(t *testin
 	}
 }
 
+// TestClaudeSendMessageWithNilStubDoesNotPanic 回归 2026-06-30 真机崩溃：
+// iOS 打开一个已存在的 Mac 会话时，file-relay/session-state 事件会先对该 sessionID
+// 调 markRunning，在 registry 里留下一个 session==nil 的占位 trackedSession。
+// getSession 对它返回 (nil, true)；旧 handleSendMessage 只判 ok 就调用 sess.Send，
+// 对 nil 接口派发导致 panic，send_message RPC 不返回结果、消息丢失。
+// 修复后：handleSendMessage 把 nil session 当"未持有真实会话"，回落到 StartSession（即 --resume）。
+func TestClaudeSendMessageWithNilStubDoesNotPanic(t *testing.T) {
+	agent := &fakeAgent{name: "claudecode", generateSessionID: true}
+	agent.sendHook = func(sess *fakeAgentSession, _ string) {
+		sess.events <- core.Event{Type: core.EventResult, SessionID: sess.id, Done: true}
+	}
+
+	handlers := newTestHandlers(t)
+	handlers.RegisterAgent("claudecode", agent)
+	serverConn, clientConn, cleanup := openTestConn(t)
+	defer cleanup()
+
+	// 模拟 iOS 已打开该会话、file-relay 把它标记为 running（session 字段为 nil 的占位 stub）。
+	const realSessionID = "b36c6286-1116-4eec-b542-8cdc8a382573"
+	handlers.sessions.markRunning(realSessionID)
+	// 自检前提：占位 stub 确实是 nil session（getSession 返回 ok=true 但 session=nil）。
+	if sess, ok := handlers.getSession(realSessionID); !ok || sess != nil {
+		t.Fatalf("前提不成立：期望 markRunning 占位返回 (nil,true)，got sess=%v ok=%v", sess, ok)
+	}
+
+	// 修复前：下一行会 panic（nil 接口派发 sess.Send）。修复后：回落到 StartSession 续接。
+	handlers.HandleRPC(serverConn, WireMessage{
+		BackendID: "claudecode",
+		Method:    "send_message",
+		RequestID: "send-nil-stub",
+		Params: mustJSONRaw(t, map[string]any{
+			"sessionId": realSessionID,
+			"content":   "hello",
+		}),
+	})
+	_ = readJSONMaps(t, clientConn, 4)
+
+	if len(agent.startCalls) != 1 {
+		t.Fatalf("nil-stub 应回落 StartSession：startCalls=%d want 1 (ids=%v)", len(agent.startCalls), agent.startCalls)
+	}
+	if agent.startCalls[0] != realSessionID {
+		t.Fatalf("应以其真实 id resume：got %q want %q", agent.startCalls[0], realSessionID)
+	}
+}
+
 func TestCodexPendingSessionRebindsToRealSessionID(t *testing.T) {
 	agent := &fakeAgent{name: "codex", generateSessionID: true}
 	agent.sendHook = func(sess *fakeAgentSession, _ string) {

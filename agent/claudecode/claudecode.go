@@ -60,6 +60,11 @@ type Agent struct {
 	// means legacy spawn as the supervisor user. See core/runas.go.
 	spawnOpts core.SpawnOptions
 
+	// settingsModelsCache / settingsModelsMtime：~/.claude/settings.json 解析出的
+	// 别名→显示名模型列表及其 mtime，用于懒重载（AvailableModels 访问时按需重读）。
+	settingsModelsCache []core.ModelOption
+	settingsModelsMtime time.Time
+
 	mu sync.RWMutex
 }
 
@@ -301,6 +306,11 @@ func (a *Agent) configuredModels() []core.ModelOption {
 }
 
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
+	// 优先用 ~/.claude/settings.json 的别名映射（owner 网关场景的权威源）。
+	// 详见 docs/2026-06-30-claudecode-models-from-settings-json.md。
+	if models := a.settingsModels(); len(models) > 0 {
+		return models
+	}
 	if models := a.configuredModels(); len(models) > 0 {
 		return models
 	}
@@ -1616,6 +1626,18 @@ func (a *Agent) providerEnvLocked() []string {
 func (a *Agent) runtimeEnvLocked() []string {
 	env := append([]string(nil), a.providerEnvLocked()...)
 	env = append(env, a.sessionEnv...)
+
+	// Tag Claude Code transcripts so iOS/MacBridge-initiated sessions appear in
+	// IDE surfaces (VSCode/JetBrains extension, Claude desktop app). claude tags
+	// stream-json-spawned sessions entrypoint "sdk-cli" by default, and every
+	// Anthropic IDE/desktop UI filters its session list to its own entrypoint —
+	// so sdk-cli sessions are invisible there despite a correct on-disk JSONL
+	// (2026-06-30: iOS new sessions wrote correctly to ~/.claude/projects/<hash>/
+	// yet were absent from the Mac VSCode/desktop session list). "claude-desktop-3p"
+	// = third-party host (MacBridge is one) and matches what the IDE extensions tag
+	// their own sessions. Verified empirically: this env var sets the transcript's
+	// entrypoint field. MergeEnv overrides+dedupes so it always wins.
+	env = core.MergeEnv(env, []string{"CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p"})
 
 	if a.routerURL != "" {
 		env = append(env, "ANTHROPIC_BASE_URL="+a.routerURL)

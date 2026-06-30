@@ -8,6 +8,32 @@
 
 ## [Unreleased]
 
+### 2026-06-30 — iOS 新建的 Claude Code session 出现在 Mac IDE/桌面会话列表（修复 entrypoint 过滤）
+
+- **现象**：iOS Claude Code 模式**新建** session 发消息，iOS 正常收到回复且消息持续可见；但 Mac 端 VSCode Claude Code 扩展（及 Claude 桌面 App）的会话列表里**找不到这条 session**，重启 Mac App 仍找不到。
+- **根因（已用磁盘 + claude 二进制证据坐实，非数据丢失）**：claude 给 stream-json 方式 spawn 出来的 session 打标 `entrypoint=sdk-cli`（这是 MacBridge 不设 `CLAUDE_CODE_ENTRYPOINT` 时的默认）。Anthropic 的 IDE/桌面会话列表**按 entrypoint 过滤，只显示各自创建的**：VSCode/JetBrains 扩展 = `claude-desktop-3p`，桌面 App = `claude-desktop`。于是 `sdk-cli`（MacBridge 创建）的 session 即便 JSONL 完整落盘在 `~/.claude/projects/<cwd-hash>/<uuid>.jsonl`、内容正确、可被 `claude --resume <id>` 打开，也被这些列表排除——重启无效，因为是 entrypoint 过滤而非缓存。取证：owner 的 Chat 项目下 30 条 session 干净二分为 `claude-desktop-3p`（24，VSCode 可见）+ `sdk-cli`（6，MacBridge 创建不可见），其余字段完全一致；claude 二进制含 `CLAUDE_CODE_ENTRYPOINT` 环境变量与各 tag 值。
+- **修复**：[`runtimeEnvLocked`](agent/claudecode/claudecode.go) 给 claude spawn env 注入 `CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p`（用 `core.MergeEnv` 覆盖+去重，确保始终生效）。MacBridge 本身就是第三方 host（"3p"），打这个标签语义正确，且与 IDE 扩展自创 session 同标签 → 出现在 **VSCode 扩展**的会话列表。实测设该 env var 后，新 session transcript 的 `entrypoint` 字段确为 `claude-desktop-3p`。
+- **范围与边界**：仅影响**新建** session；已存在的 6 条 `sdk-cli` 旧 session 仍不在列表（未原地改写 transcript）。本修复只决定 transcript 的展示标签，不影响 iOS 端可见性、消息收发或持久化。
+- **已知不可修 surface**：独立 **Claude 桌面 App**（`/Applications/Claude.app`）即便 session 同标签也不显示 iOS/MacBridge 创建的 session。取证：桌面 App 自带独立 Claude Code runtime（`~/Library/Application Support/Claude-3p/claude-code/2.1.187/`），其可见 session 与 iOS session 的 `entrypoint` 都是 `claude-desktop-3p`（仅 `version` 2.1.187 vs 2.1.185 之差），说明桌面 App 不按 tag/字段过滤，而是用自有 Electron 会话索引（IndexedDB）只收录经它自己创建的 session，不扫 `~/.claude/projects/`。这是桌面 App 的产品设计，非 MacBridge 可修；iOS 创建的 session 仍可经 **iOS / VSCode 扩展 / 终端 `claude --resume <id>`** 访问。
+- **验证**：定向 Go 单测 `TestRuntimeEnvTagsClaudeEntrypointForIDEVisibility` / `TestRuntimeEnvClaudeEntrypointOverridesAndDedupes` 守护；Release 重建 + 覆盖 `/Applications` 安装 + 重启完成，新 runtime 已起（`cordcode-bridge-runtime` 二进制含该 env var）。**端到端：owner 已验收 iOS 新建 Claude session 出现在 VSCode 扩展列表；Claude 桌面 App 不显示（见上，已知不可修）。**
+
+### 2026-06-30 — Claude Code 模型列表以 `~/.claude/settings.json` 为权威源（修复网关场景下选 GLM 仍 529）
+
+- **现象**：iOS Claude Code 模式选 GLM-4.7 发消息，claude 回报 `Repeated 529 Overloaded … inference gateway (127.0.0.1:15721)`，即使 GLM 无速率限制。
+- **根因**：`AvailableModels`（[`agent/claudecode/claudecode.go`](agent/claudecode/claudecode.go)）从 provider/网关 `/v1/models`/硬编码取模型，不读 owner 的 `~/.claude/settings.json`。该文件的 `env` 块是一张别名表：`ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL`（真实 id，如 `claude-haiku-4-5`）+ `*_MODEL_NAME`（显示名，如 `glm-4.7`）。网关收到 `claude-haiku-4-5` 才路由到 GLM-4.7，"glm-4.7" 只是显示名。旧逻辑下 iOS 拿到的模型 `providerID="default"`，被 iOS 的 `providerID=="claude"` 过滤丢弃 → 不带 model 发送 → claude 无 `--model` → 网关默认路由 → 529。
+- **修复**：
+  1. 新增 [`agent/claudecode/settings_models.go`](agent/claudecode/settings_models.go)：读 `~/.claude/settings.json`（`CLAUDE_CONFIG_DIR` 优先），把三对别名映射成 `ModelOption{Name=claude 别名(haiku/sonnet/opus), Desc=*_MODEL_NAME}`；mtime 懒重载（不引入 fsnotify、不启后台 goroutine）；缺失/无映射返回 nil 走 fallback。`AvailableModels` 优先用它。只读 `*_MODEL`/`*_MODEL_NAME`，不把 `ANTHROPIC_API_KEY`/`AUTH_TOKEN` 等密钥反序列化进程序变量。
+  2. [`modelProviderForAgent`](go-bridge/handlers.go) 对 `claudecode` 显式返回 `providerID="claude"`（语义正确，且让 iOS 的过滤通过）。
+- **映射契约**：`Name`（送 `claude --model`）= 别名，claude 按 settings.json 解析成真实 id 送网关——与 owner 顶层 `"model":"opus"` 同机制。iOS 显示 `*_MODEL_NAME`（glm-4.7）、发送别名（haiku）。iOS 侧无需改动。
+- **验证**：定向单测 `TestSettingsModels_*`（5 项）通过；go-bridge model/provider 测试无回归；Release 重建 + 重启完成，新 runtime `runtime_ready`。端到端（iOS 选 GLM-4.7 不再 529、收到回复）由 owner 真机验收。详见 `../cordcode-ios/docs/2026-06-30-claudecode-models-from-settings-json.md`。
+
+### 2026-06-30 — 修复 iOS 向已存在 Claude Code 会话发消息时 go-bridge 崩溃（消息被吞）
+
+- **现象**：iOS 打开一个 Mac 端已存在的 Claude Code session 并发送消息，iOS 收不到回复、Mac 端刷新也看不到这条消息（重启后 iOS 也丢失）。
+- **根因（已用 `go-bridge.log` 坐实）**：iOS 打开会话时，`claudeSessionFileRelay`/session-state 事件会先对该 sessionID 调 `markRunning`，在 `sessionRegistry` 留下 `session==nil` 的占位 `trackedSession`（用于状态追踪）。`getSession` 对它返回 `(nil, true)`；`handleSendMessage`（[handlers.go:1817](go-bridge/handlers.go)）只判 `ok` 就调用 `sess.Send`（[:1887](go-bridge/handlers.go)），对 nil 接口派发 → **panic**，HTTP 连接被 net/http 回收，`send_message` RPC 永不返回结果，消息也没送达 agent。
+- **修复**：`handleSendMessage` 的首次 session 查找改为 `if !ok || sess == nil`（与同函数二次检查 `existingOk && existing != nil` 一致），把 nil 占位当"未持有真实会话"，回落到 `StartSession(ctx, realID)` 即 `claude --resume` 正确续接。`getSession`/`markRunning` 的状态追踪契约不变（`ok` 仍表示 trackedSession 存在），避免影响 `resume_session` 的 runtimeState 等既有行为。
+- **验证**：定向 Go 单测 `TestClaudeSendMessageWithNilStubDoesNotPanic` 复现并守护；go-bridge 全量测试通过（除 4 个因本机未装 `codex` CLI 的环境性失败）。Release 构建 + 覆盖 `/Applications` 安装 + 重启 MacBridge 完成，新 runtime 已 `runtime_ready`。真机端到端（发消息收到回复、Mac 能看到）由 owner 验收。
+
 ### 2026-06-30 — Codex 历史 session 下发用户图片附件
 
 - **修复 Codex 历史消息丢失 `input_image`**：Codex JSONL 的 rich history 解析现在会把用户消息里的 `input_image.image_url` 转成协议 `files/parts`，iOS 打开历史 session 时可拿到 Mac 端 Codex 已显示的真实图片。

@@ -1321,6 +1321,12 @@ func modelProviderForAgent(agent core.Agent, raw string) (id, provider, provider
 	if agent.Name() == "codex" {
 		return id, "openai", "openai"
 	}
+	// claudecode 后端的所有模型都经 claude CLI，属 claude provider。显式标 "claude"，
+	// 否则无前缀的别名（haiku/sonnet/opus）会被解析成 "default"，被 iOS 的
+	// providerID=="claude" 过滤丢弃（见 docs/2026-06-30-claudecode-models-from-settings-json.md §1.3）。
+	if agent.Name() == "claudecode" {
+		return id, "claude", "claude"
+	}
 	return id, provider, providerID
 }
 
@@ -1817,7 +1823,10 @@ func (h *Handlers) handleSendMessage(conn Connection, msg WireMessage, agent cor
 	sess, ok := h.getSession(params.SessionID)
 	h.mu.Unlock()
 
-	if !ok {
+	// ok=true 但 sess==nil 表示 registry 里只有 markRunning/markIdle 建的占位 stub，
+	// 尚无真实 agent 会话——必须走 StartSession（对真实 id 即 --resume）续接，
+	// 否则下面 sess.Send 会对 nil 接口派发而 panic（2026-06-30 真机复现的崩溃）。
+	if !ok || sess == nil {
 		resumeID := params.SessionID
 		if strings.HasPrefix(resumeID, "pending-") {
 			resumeID = ""
