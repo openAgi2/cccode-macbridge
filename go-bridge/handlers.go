@@ -2177,9 +2177,11 @@ func (h *Handlers) claudeSessionFileRelayLoop(sessionID string, conn Connection,
 		return info.Size()
 	}()
 
-	// 检查 transcript 当前最后一条消息，广播当前状态。
-	// 如果最后一条是已完成的 assistant，广播 idle 状态。
-	if state := h.detectClaudeTranscriptState(sessPath); state == "idle" {
+	// 检查 transcript 当前最后一条消息，广播当前状态。只有确认最后一条
+	// 表示仍在运行时才初始广播 running；unknown 不能冒充 running，否则
+	// iOS 打开一个已完成的外部 Claude session 后会被卡在执行中。
+	initialState := h.detectClaudeTranscriptState(sessPath)
+	if initialState == "idle" {
 		h.mu.Lock()
 		dir := h.sessions.directoryForSession(sessionID)
 		h.mu.Unlock()
@@ -2207,23 +2209,26 @@ func (h *Handlers) claudeSessionFileRelayLoop(sessionID string, conn Connection,
 	defer ticker.Stop()
 	skipNextResumeNoResponse := false
 
-	// 广播 turn_started（session 正在执行中）。
 	h.mu.Lock()
 	dir := h.sessions.directoryForSession(sessionID)
 	h.mu.Unlock()
-	h.sessions.markRunning(sessionID)
-	h.broadcaster.Send(BroadcastEvent{
-		BackendID: backendID,
-		SessionID: sessionID,
-		Directory: dir,
-		Message: EventMessage{
-			Type:      "event",
-			SessionID: sessionID,
+	if initialState == "running" {
+		h.sessions.markRunning(sessionID)
+		h.broadcaster.Send(BroadcastEvent{
 			BackendID: backendID,
-			Event:     "session_state_changed",
-			Data:      map[string]interface{}{"state": "running"},
-		},
-	})
+			SessionID: sessionID,
+			Directory: dir,
+			Message: EventMessage{
+				Type:      "event",
+				SessionID: sessionID,
+				BackendID: backendID,
+				Event:     "session_state_changed",
+				Data:      map[string]interface{}{"state": "running"},
+			},
+		})
+	} else {
+		slog.Info("go-bridge: claudeSessionFileRelay initial state unknown, waiting for transcript growth", "sessionID", sessionID)
+	}
 
 	for range ticker.C {
 		info, err := os.Stat(sessPath)
