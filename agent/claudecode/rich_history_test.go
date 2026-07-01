@@ -202,6 +202,43 @@ func TestGetRichSessionHistory_HidesSkillInstructionInjection(t *testing.T) {
 	}
 }
 
+func TestGetRichSessionHistory_HidesResumeMetaContinuation(t *testing.T) {
+	homeDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workDir): %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+
+	writeClaudeTranscriptFixture(t, homeDir, workDir, "ses-resume-meta", []string{
+		`{"type":"user","timestamp":"2026-07-01T08:00:00Z","message":{"id":"user-1","role":"user","content":"first real prompt"}}`,
+		`{"type":"assistant","timestamp":"2026-07-01T08:00:01Z","message":{"id":"assistant-1","role":"assistant","model":"glm-5.2","content":[{"type":"text","text":"first real answer"}],"stop_reason":"end_turn"}}`,
+		`{"type":"user","isMeta":true,"timestamp":"2026-07-01T08:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Continue from where you left off."}]}}`,
+		`{"type":"assistant","timestamp":"2026-07-01T08:01:00Z","message":{"id":"assistant-meta","role":"assistant","model":"glm-5.2","content":[{"type":"text","text":"No response requested."}],"stop_reason":"end_turn"}}`,
+		`{"type":"user","timestamp":"2026-07-01T08:01:01Z","message":{"id":"user-2","role":"user","content":"second real prompt"}}`,
+		`{"type":"assistant","timestamp":"2026-07-01T08:01:02Z","message":{"id":"assistant-2","role":"assistant","model":"glm-5.2","content":[{"type":"text","text":"second real answer"}],"stop_reason":"end_turn"}}`,
+	})
+
+	agent := &Agent{workDir: workDir}
+	entries, err := agent.GetRichSessionHistory(context.Background(), "ses-resume-meta", 0)
+	if err != nil {
+		t.Fatalf("GetRichSessionHistory() error = %v", err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("entry count = %d, want 4: %#v", len(entries), entries)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Content, "Continue from where you left off") ||
+			strings.Contains(entry.Content, "No response requested") {
+			t.Fatalf("resume meta continuation leaked into visible history: %#v", entry)
+		}
+	}
+	if entries[2].Role != "user" || entries[2].Content != "second real prompt" {
+		t.Fatalf("second real user entry = %#v, want second real prompt", entries[2])
+	}
+}
+
 func writeClaudeTranscriptFixture(t *testing.T, homeDir, workDir, sessionID string, lines []string) string {
 	t.Helper()
 	absWorkDir, err := filepath.Abs(workDir)

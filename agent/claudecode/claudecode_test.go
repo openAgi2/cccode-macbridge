@@ -629,5 +629,37 @@ func TestIsSessionExecuting(t *testing.T) {
 	if isSessionExecuting(sessionPath) {
 		t.Error("expected false when trailing line is non-message but last message is end_turn")
 	}
-}
 
+	// Case 8: Claude CLI resume meta user should not make an idle session look running
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Continue from where you left off."}]}}`,
+	})
+	if isSessionExecuting(sessionPath) {
+		t.Error("expected false when trailing line is Claude resume meta user")
+	}
+
+	// Case 9: The paired no-response assistant is also hidden from execution state
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Continue from where you left off."}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"No response requested."}]}}`,
+	})
+	if isSessionExecuting(sessionPath) {
+		t.Error("expected false after Claude resume no-response assistant")
+	}
+
+	// Case 10: A real user after the hidden resume pair still means running
+	writeLines([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Continue from where you left off."}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"No response requested."}]}}`,
+		`{"type":"user","message":{"role":"user","content":"second real prompt"}}`,
+	})
+	if !isSessionExecuting(sessionPath) {
+		t.Error("expected true when real user follows hidden Claude resume pair")
+	}
+}

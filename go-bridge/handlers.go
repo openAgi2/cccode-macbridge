@@ -2205,6 +2205,7 @@ func (h *Handlers) claudeSessionFileRelayLoop(sessionID string, conn Connection,
 	const pollInterval = 3 * time.Second
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	skipNextResumeNoResponse := false
 
 	// 广播 turn_started（session 正在执行中）。
 	h.mu.Lock()
@@ -2261,19 +2262,23 @@ func (h *Handlers) claudeSessionFileRelayLoop(sessionID string, conn Connection,
 			if len(line) == 0 {
 				continue
 			}
-			var entry struct {
-				Type    string `json:"type"`
-				Message *struct {
-					Role       string          `json:"role"`
-					StopReason string          `json:"stop_reason"`
-					Content    json.RawMessage `json:"content"`
-				} `json:"message"`
-			}
+			var entry claudeTranscriptRelayEntry
 			if err := json.Unmarshal(line, &entry); err != nil {
 				continue
 			}
 			if entry.Message == nil {
 				continue
+			}
+			if isClaudeResumeMetaRelayEntry(entry) {
+				skipNextResumeNoResponse = true
+				continue
+			}
+			if skipNextResumeNoResponse {
+				if isClaudeResumeNoResponseRelayEntry(entry) {
+					skipNextResumeNoResponse = false
+					continue
+				}
+				skipNextResumeNoResponse = false
 			}
 			if entry.Type == "user" {
 				lastEntryType = "user"
@@ -2390,6 +2395,60 @@ func (h *Handlers) claudeSessionFileRelayLoop(sessionID string, conn Connection,
 	}
 }
 
+type claudeTranscriptRelayEntry struct {
+	Type    string `json:"type"`
+	IsMeta  bool   `json:"isMeta"`
+	Message *struct {
+		Role       string          `json:"role"`
+		StopReason string          `json:"stop_reason"`
+		Content    json.RawMessage `json:"content"`
+	} `json:"message"`
+}
+
+type claudeTranscriptRelayTextBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+func claudeTranscriptRelayTextBlocks(raw json.RawMessage) []claudeTranscriptRelayTextBlock {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return []claudeTranscriptRelayTextBlock{{Type: "text", Text: text}}
+	}
+	var blocks []claudeTranscriptRelayTextBlock
+	if json.Unmarshal(raw, &blocks) != nil {
+		return nil
+	}
+	return blocks
+}
+
+func isClaudeResumeMetaRelayEntry(entry claudeTranscriptRelayEntry) bool {
+	if !entry.IsMeta || entry.Type != "user" || entry.Message == nil {
+		return false
+	}
+	for _, block := range claudeTranscriptRelayTextBlocks(entry.Message.Content) {
+		if block.Type == "text" && strings.TrimSpace(block.Text) == "Continue from where you left off." {
+			return true
+		}
+	}
+	return false
+}
+
+func isClaudeResumeNoResponseRelayEntry(entry claudeTranscriptRelayEntry) bool {
+	if entry.Type != "assistant" || entry.Message == nil {
+		return false
+	}
+	for _, block := range claudeTranscriptRelayTextBlocks(entry.Message.Content) {
+		if block.Type == "text" && strings.TrimSpace(block.Text) == "No response requested." {
+			return true
+		}
+	}
+	return false
+}
+
 // detectClaudeTranscriptState 扫描 transcript 文件的最后几条消息，
 // 判定 session 当前是否处于执行中。用于文件 relay 的初始状态检测。
 func (h *Handlers) detectClaudeTranscriptState(sessPath string) string {
@@ -2401,24 +2460,29 @@ func (h *Handlers) detectClaudeTranscriptState(sessPath string) string {
 
 	var lastEntryType, lastStopReason string
 	var lastUserIsInterrupt bool
+	skipNextResumeNoResponse := false
 
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024*16)
 	for scanner.Scan() {
-		var entry struct {
-			Type    string `json:"type"`
-			Message *struct {
-				Role       string          `json:"role"`
-				StopReason string          `json:"stop_reason"`
-				Content    json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
+		var entry claudeTranscriptRelayEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
 		if entry.Message == nil {
 			continue
+		}
+		if isClaudeResumeMetaRelayEntry(entry) {
+			skipNextResumeNoResponse = true
+			continue
+		}
+		if skipNextResumeNoResponse {
+			if isClaudeResumeNoResponseRelayEntry(entry) {
+				skipNextResumeNoResponse = false
+				continue
+			}
+			skipNextResumeNoResponse = false
 		}
 		if entry.Type == "user" {
 			lastEntryType = "user"

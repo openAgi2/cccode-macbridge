@@ -172,14 +172,11 @@ func scanClaudeSessionMeta(path, projectDir, sessionID string) (claudeSessionMet
 	var summary string
 	userCount := 0
 	lineNo := 0
+	skipNextResumeNoResponse := false
 
 	for scanner.Scan() {
 		lineNo++
-		var entry struct {
-			Type        string                    `json:"type"`
-			CustomTitle string                    `json:"customTitle"`
-			Message     *transcriptHistoryMessage `json:"message"`
-		}
+		var entry transcriptHistoryEnvelope
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
@@ -192,6 +189,18 @@ func scanClaudeSessionMeta(path, projectDir, sessionID string) (claudeSessionMet
 		}
 		if entry.Message == nil {
 			continue
+		}
+		blocks := decodeTranscriptContentBlocks(entry.Message.Content)
+		if isClaudeResumeMetaUser(entry, blocks) {
+			skipNextResumeNoResponse = true
+			continue
+		}
+		if skipNextResumeNoResponse {
+			if isClaudeResumeNoResponseAssistant(entry, blocks) {
+				skipNextResumeNoResponse = false
+				continue
+			}
+			skipNextResumeNoResponse = false
 		}
 		switch entry.Type {
 		case "assistant":

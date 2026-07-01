@@ -519,16 +519,26 @@ func isSessionExecuting(sessionPath string) bool {
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024*16) // Up to 16MB per line
 
+	skipNextResumeNoResponse := false
 	for scanner.Scan() {
-		var entry struct {
-			Type    string                    `json:"type"`
-			Message *transcriptHistoryMessage `json:"message"`
-		}
+		var entry transcriptHistoryEnvelope
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
 		if entry.Message == nil {
 			continue
+		}
+		blocks := decodeTranscriptContentBlocks(entry.Message.Content)
+		if isClaudeResumeMetaUser(entry, blocks) {
+			skipNextResumeNoResponse = true
+			continue
+		}
+		if skipNextResumeNoResponse {
+			if isClaudeResumeNoResponseAssistant(entry, blocks) {
+				skipNextResumeNoResponse = false
+				continue
+			}
+			skipNextResumeNoResponse = false
 		}
 		if entry.Type == "user" {
 			lastMsg.Role = "user"
@@ -676,9 +686,11 @@ func stripXMLTags(s string) string {
 const transcriptScannerMaxBytes = 16 * 1024 * 1024
 
 type transcriptHistoryEnvelope struct {
-	Type      string                    `json:"type"`
-	Timestamp string                    `json:"timestamp"`
-	Message   *transcriptHistoryMessage `json:"message"`
+	Type        string                    `json:"type"`
+	Timestamp   string                    `json:"timestamp"`
+	CustomTitle string                    `json:"customTitle"`
+	Message     *transcriptHistoryMessage `json:"message"`
+	IsMeta      bool                      `json:"isMeta"`
 }
 
 type transcriptHistoryMessage struct {
@@ -888,6 +900,30 @@ func decodeTranscriptContentBlocks(raw json.RawMessage) []transcriptContentBlock
 	return blocks
 }
 
+func isClaudeResumeMetaUser(raw transcriptHistoryEnvelope, blocks []transcriptContentBlock) bool {
+	if !raw.IsMeta || raw.Type != "user" || raw.Message == nil {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) == "Continue from where you left off." {
+			return true
+		}
+	}
+	return false
+}
+
+func isClaudeResumeNoResponseAssistant(raw transcriptHistoryEnvelope, blocks []transcriptContentBlock) bool {
+	if raw.Type != "assistant" || raw.Message == nil {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) == "No response requested." {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeToolResultOutput(raw json.RawMessage) any {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -963,6 +999,7 @@ func LoadClaudeRichHistoryFromReader(r io.Reader, path string) ([]core.RichHisto
 	toolOwners := make(map[string]*richHistoryMessageBuilder)
 	pendingToolResults := make(map[string]transcriptToolResult)
 	skipNextSkillInstruction := false
+	skipNextResumeNoResponse := false
 
 	lineNo := 0
 	for scanner.Scan() {
@@ -981,6 +1018,17 @@ func LoadClaudeRichHistoryFromReader(r io.Reader, path string) ([]core.RichHisto
 		}
 
 		blocks := decodeTranscriptContentBlocks(raw.Message.Content)
+		if isClaudeResumeMetaUser(raw, blocks) {
+			skipNextResumeNoResponse = true
+			continue
+		}
+		if skipNextResumeNoResponse {
+			if isClaudeResumeNoResponseAssistant(raw, blocks) {
+				skipNextResumeNoResponse = false
+				continue
+			}
+			skipNextResumeNoResponse = false
+		}
 		timestamp := parseTranscriptTimestamp(raw.Timestamp)
 
 		switch raw.Type {

@@ -1738,6 +1738,43 @@ func TestDrainHistoryEventsWaitsForClaudeResumeDrainSignal(t *testing.T) {
 	}
 }
 
+func TestDetectClaudeTranscriptStateIgnoresResumeMetaContinuation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude.jsonl")
+	lines := []string{
+		`{"type":"user","timestamp":"2026-07-01T08:00:00Z","message":{"role":"user","content":"first real prompt"}}`,
+		`{"type":"assistant","timestamp":"2026-07-01T08:00:01Z","message":{"id":"assistant-1","role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}`,
+		`{"type":"user","isMeta":true,"timestamp":"2026-07-01T08:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Continue from where you left off."}]}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	handlers := &Handlers{}
+	if got := handlers.detectClaudeTranscriptState(path); got != "idle" {
+		t.Fatalf("state with pending resume meta = %q, want idle", got)
+	}
+
+	lines = append(lines,
+		`{"type":"assistant","timestamp":"2026-07-01T08:01:00Z","message":{"id":"assistant-meta","role":"assistant","content":[{"type":"text","text":"No response requested."}],"stop_reason":"end_turn"}}`,
+	)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := handlers.detectClaudeTranscriptState(path); got != "idle" {
+		t.Fatalf("state after resume no-response = %q, want idle", got)
+	}
+
+	lines = append(lines,
+		`{"type":"user","timestamp":"2026-07-01T08:01:01Z","message":{"role":"user","content":"second real prompt"}}`,
+	)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := handlers.detectClaudeTranscriptState(path); got != "running" {
+		t.Fatalf("state after real user = %q, want running", got)
+	}
+}
+
 func TestCodexPendingSessionRebindsToRealSessionID(t *testing.T) {
 	agent := &fakeAgent{name: "codex", generateSessionID: true}
 	agent.sendHook = func(sess *fakeAgentSession, _ string) {
