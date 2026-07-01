@@ -1719,6 +1719,25 @@ func TestClaudeSendMessageWithNilStubDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestDrainHistoryEventsWaitsForClaudeResumeDrainSignal(t *testing.T) {
+	drained := make(chan struct{})
+	session := &fakeAgentSession{
+		id:               "claude-resume",
+		events:           make(chan core.Event, 1),
+		historyDrainDone: drained,
+	}
+
+	started := time.Now()
+	time.AfterFunc(250*time.Millisecond, func() {
+		close(drained)
+	})
+	drainHistoryEvents(session)
+
+	if elapsed := time.Since(started); elapsed < 200*time.Millisecond {
+		t.Fatalf("drainHistoryEvents returned too early after %s; want it to wait for drain signal", elapsed)
+	}
+}
+
 func TestCodexPendingSessionRebindsToRealSessionID(t *testing.T) {
 	agent := &fakeAgent{name: "codex", generateSessionID: true}
 	agent.sendHook = func(sess *fakeAgentSession, _ string) {

@@ -1988,10 +1988,25 @@ func normalizeClaudeRuntimeEffort(raw string) string {
 	}
 }
 
-// drainHistoryEvents 排空 claude --resume 重放的历史事件。
-// 历史重放以一个 result 事件结束，排空到 result 为止。
-// 如果 session 为空或历史很短，100ms 无事件则返回。
+type historyDrainWaiter interface {
+	WaitForHistoryDrain(context.Context) bool
+}
+
+// drainHistoryEvents 等待 claude --resume 的历史重放窗口关闭。
+// 旧实现用“100ms 没有事件”推断历史已排空，但 Claude CLI 启动/重放经常会有
+// 更长空窗；随后真实 send 的输出会落在 historyDraining 窗口里被吞掉。
+// Claude session 现在暴露权威 drain 信号：result 或内部 watchdog 关闭窗口后再发送。
 func drainHistoryEvents(sess core.AgentSession) {
+	if waiter, ok := sess.(historyDrainWaiter); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if waiter.WaitForHistoryDrain(ctx) {
+			return
+		}
+		slog.Warn("go-bridge: timed out waiting for Claude resume history drain")
+		return
+	}
+
 	events := sess.Events()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

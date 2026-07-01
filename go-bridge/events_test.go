@@ -1,6 +1,7 @@
 package gobridge
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
@@ -18,15 +19,16 @@ import (
 )
 
 type fakeAgentSession struct {
-	id          string
-	events      chan core.Event
-	sentPrompts []string
-	sendErr     error
-	sendHook    func(*fakeAgentSession, string)
-	liveMode    string
-	liveModeOK  bool
-	closeOnce   sync.Once
-	closed      bool
+	id               string
+	events           chan core.Event
+	sentPrompts      []string
+	sendErr          error
+	sendHook         func(*fakeAgentSession, string)
+	liveMode         string
+	liveModeOK       bool
+	historyDrainDone chan struct{}
+	closeOnce        sync.Once
+	closed           bool
 }
 
 func (f *fakeAgentSession) Send(prompt string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
@@ -59,6 +61,18 @@ func (f *fakeAgentSession) SetLiveMode(mode string) bool {
 
 func (f *fakeAgentSession) Events() <-chan core.Event {
 	return f.events
+}
+
+func (f *fakeAgentSession) WaitForHistoryDrain(ctx context.Context) bool {
+	if f.historyDrainDone == nil {
+		return true
+	}
+	select {
+	case <-f.historyDrainDone:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (f *fakeAgentSession) CurrentSessionID() string {

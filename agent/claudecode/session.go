@@ -43,11 +43,13 @@ type claudeSession struct {
 	done            chan struct{}
 	alive           atomic.Bool
 
-	activeMsgID     atomic.Value // stores string — 当前正在 diff 的 message.id
-	emittedText     atomic.Value // stores string — 当前 message.id 下已发送的累积文本
-	historyDraining atomic.Bool  // --resume 启动后的历史重放期；drain 期间不 emit live 事件
-	streamState     streamEventState
-	toolNameByUseID sync.Map // tool_use_id → tool_name
+	activeMsgID      atomic.Value // stores string — 当前正在 diff 的 message.id
+	emittedText      atomic.Value // stores string — 当前 message.id 下已发送的累积文本
+	historyDraining  atomic.Bool  // --resume 启动后的历史重放期；drain 期间不 emit live 事件
+	historyDrainDone chan struct{}
+	historyDrainOnce sync.Once
+	streamState      streamEventState
+	toolNameByUseID  sync.Map // tool_use_id → tool_name
 
 	// gracefulStopTimeout is how long Close() waits for a clean exit
 	// (stdin close → Stop hooks → process exit) before escalating to
@@ -249,6 +251,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		ctx:                 sessionCtx,
 		cancel:              cancel,
 		done:                make(chan struct{}),
+		historyDrainDone:    make(chan struct{}),
 		gracefulStopTimeout: 120 * time.Second,
 	}
 	cs.setPermissionMode(mode)
@@ -263,9 +266,11 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		time.AfterFunc(3*time.Second, func() {
 			if cs.historyDraining.Load() {
 				slog.Warn("claudeSession: historyDraining still true after timeout, forcing exit")
-				cs.historyDraining.Store(false)
+				cs.markHistoryDrained()
 			}
 		})
+	} else {
+		cs.markHistoryDrained()
 	}
 
 	go cs.readLoop(stdout, &stderrBuf)
@@ -405,6 +410,12 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 func (cs *claudeSession) handleSystem(raw map[string]any) {
 	if sid, ok := raw["session_id"].(string); ok && sid != "" {
 		cs.sessionID.Store(sid)
+		if cs.historyDraining.Load() {
+			cs.activeMsgID.Store("")
+			cs.emittedText.Store("")
+			cs.streamState.reset()
+			return
+		}
 		evt := core.Event{Type: core.EventText, SessionID: sid}
 		select {
 		case cs.events <- evt:
@@ -733,7 +744,7 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 	}
 
 	if cs.historyDraining.Load() {
-		cs.historyDraining.Store(false)
+		cs.markHistoryDrained()
 		cs.activeMsgID.Store("")
 		cs.emittedText.Store("")
 		cs.streamState.reset()
@@ -1004,6 +1015,28 @@ func (cs *claudeSession) SetLiveMode(mode string) bool {
 
 func (cs *claudeSession) Events() <-chan core.Event {
 	return cs.events
+}
+
+func (cs *claudeSession) WaitForHistoryDrain(ctx context.Context) bool {
+	if cs.historyDrainDone == nil {
+		return true
+	}
+	select {
+	case <-cs.historyDrainDone:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (cs *claudeSession) markHistoryDrained() {
+	cs.historyDraining.Store(false)
+	if cs.historyDrainDone == nil {
+		return
+	}
+	cs.historyDrainOnce.Do(func() {
+		close(cs.historyDrainDone)
+	})
 }
 
 func (cs *claudeSession) CurrentSessionID() string {
